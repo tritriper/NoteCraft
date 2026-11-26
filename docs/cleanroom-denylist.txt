@@ -1,0 +1,13 @@
+# Clean-room denylist for NoteCraft.
+#
+# Format: one term per line; matching is a case-insensitive substring match; a line starting
+# with `#` is a comment; blank lines are ignored.
+#
+# Maintained by the spec room (the separate spec repository, the only place the reference
+# product is studied): it supplies the terms with each copy of the spec — third-party brand
+# names and identifiers that must never appear in this repository.
+#
+# The cleanroom-auditor agent (.claude/agents/cleanroom-auditor.md) fails a diff that
+# contains any term below.
+#
+# No terms yet.

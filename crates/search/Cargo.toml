@@ -1,0 +1,15 @@
+[package]
+name = "notecraft-search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "NoteCraft search: the full-text index over a workspace's pages"
+
+[lints]
+workspace = true
+
+[dependencies]
+notecraft-model = { workspace = true }
+notecraft-md = { workspace = true }

@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+# The Craft suite's minimum (WordCraft and GridCraft declare the same); `rust-toolchain.toml` builds with current stable.
+rust-version = "1.95"
+
+[workspace.dependencies]
+# internal, by layer: a crate depends only on crates of a strictly lower layer (`cargo xtask ci` checks it)
+# L1
+notecraft-model = { path = "crates/model" }
+# L2
+notecraft-md = { path = "crates/md" }
+notecraft-query = { path = "crates/query" }
+# L3
+notecraft-store = { path = "crates/store" }
+notecraft-search = { path = "crates/search" }
+# L4
+notecraft-engine = { path = "crates/engine" }
+# L5
+notecraft-mcp = { path = "crates/mcp" }
+# L6
+notecraft-ui-egui = { path = "crates/ui-egui" }
+
+# external (tooling only so far)
+serde_json = "1"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+
+# Line tables keep file and line in panics and backtraces; full debug info
+# for every test binary and dependency would multiply the target dir size.
+# The test profile inherits both settings.
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+[profile.dev]
+opt-level = 1
+debug = "line-tables-only"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16
+debug = 0

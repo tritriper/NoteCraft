@@ -1,0 +1,19 @@
+[package]
+name = "notecraft-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "NoteCraft command line: runs engine commands and starts the MCP server"
+
+[[bin]]
+name = "notecraft"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+notecraft-engine = { workspace = true }
+notecraft-mcp = { workspace = true }

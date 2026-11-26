@@ -1,0 +1,15 @@
+[package]
+name = "notecraft-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "NoteCraft MCP server: exposes the engine's commands as Model Context Protocol tools"
+
+[lints]
+workspace = true
+
+[dependencies]
+notecraft-engine = { workspace = true }
+notecraft-model = { workspace = true }

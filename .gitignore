@@ -1,0 +1,17 @@
+# Build output: the default target dir and every per-agent one (target/agent-<name> lives inside target/).
+target*/
+
+# Local notebooks and logs: the spec copy (plan/spec/), status, story notes and reviews; run logs.
+plan/
+log/
+
+# Editors and OS
+.DS_Store
+*~
+*.swp
+.idea/
+.vscode/
+
+# Agent tools: personal settings and worktrees stay local; .claude/agents/ is committed on purpose.
+.claude/settings.local.json
+.claude/worktrees/
