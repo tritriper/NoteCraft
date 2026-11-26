@@ -1,0 +1,17 @@
+# Rules for agents in Craft repositories
+
+The shared rules for agents in Craft repositories apply here in full: [`standards/app-agents.md`](https://github.com/storytold/craft-contrib/blob/main/standards/app-agents.md) in storytold/craft-contrib (RFC-0072). Their generated copy, between `craft-agents` markers that record the source commit and digest, goes above this section; it is written by the suite's `house_rules.py write-agents` (storytold/craft-common-actions, `actions/house-rules/`) and has not been inserted yet. Until then, read the standard at that link before any task.
+
+## This repository
+
+NoteCraft is the Craft suite's pages, databases and tasks app: one app with three modes (Pages, Databases, Tasks) over one data model, local-first, with Git as its history and sync layer and agents as first-class users. It targets macOS, Windows, Linux, BSD and the web (WASM). Stage: pre-alpha scaffold (US-L0-01); nothing is usable yet.
+
+- Layout (crates in `crates/`, lowest layer first): L1 `model`; L2 `md`, `query`; L3 `store`, `search`; L4 `engine` (session, undo, command registry, parity catalog); L5 `mcp`; L6 `ui-egui`; app `cli` (binary `notecraft`). L0 is reserved. A crate depends only on crates of a strictly lower layer, and only `ui-egui` may use egui, eframe, winit or rfd: `cargo xtask layers` checks both against the table in `xtask/src/layers.rs`.
+- Commands: each user-visible action will be a `CommandSpec` in `crates/engine` (UI-only `ui.*` commands in `ui-egui`); the UI, shortcuts, CLI, control channel and MCP all dispatch by command id.
+- Checks: `cargo xtask ci` runs `fmt`, `clippy` (`-D warnings`), `test`, `assets`, `layers`, `lints` and `wasm`. For the crates you changed: `cargo fmt --all --check`, `cargo clippy -p <crate> --all-targets -- -D warnings`, `cargo test -p <crate>`, `cargo xtask layers`, `cargo xtask lints`, `cargo xtask wasm`, and `cargo xtask assets` when assets change.
+- `unsafe`: none; the workspace forbids it. Never crash: every crate root denies `unwrap_used`, `expect_used`, `panic`, `unimplemented`, `todo` and `unreachable` (`cargo xtask lints` checks the attribute; `clippy.toml` allows them in tests). Each crate gets a hostile-input sweep (US-L0-08).
+- Attribution: `ATTRIBUTION.md`, a row per asset file, checked by `cargo xtask assets`.
+- Clean room: the behaviour spec is written in a separate spec repository, the only place the reference product is studied; this repository receives a copy in `plan/spec/`. Agents here never operate, inspect or research the reference product, and never name it in code, ids, file names, UI strings, commit messages or docs. `docs/cleanroom-denylist.txt` lists terms that must not appear.
+- Agents: roles and the user-story workflow are in `docs/methodo-agents.md`; agent definitions are in `.claude/agents/`, committed on purpose (a departure from rule 35 for that directory only). One user story per branch `us/Lx-nn-slug` and worktree; `develop` integrates; only the owner merges to `main`. Each agent uses its own `CARGO_TARGET_DIR=target/agent-<name>` and deletes it when done. Commits: `US-Lx-nn: what`.
+- Agent entry point (from US-L0-06): `notecraft mcp --automation-read-root DIR --automation-write-root DIR`.
+- Progress: `ROADMAP.md` (summary), `docs/roadmap.md` (milestones M0–M5 = lots L0–L5), `docs/gaps.md`, `docs/architecture.md`, decisions in `docs/adr/`. The progress log is one fragment file per change in `docs/progress/` (rule 19). `plan/` is the gitignored notebook: spec copy, status, story notes, reviews.

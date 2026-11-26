@@ -1,0 +1,15 @@
+[package]
+name = "notecraft-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "NoteCraft storage: the on-disk workspace inside a .craft project, as merge-friendly text with a rebuildable cache"
+
+[lints]
+workspace = true
+
+[dependencies]
+notecraft-model = { workspace = true }
+notecraft-md = { workspace = true }

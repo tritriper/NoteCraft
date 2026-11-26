@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # Rust dependencies: minor and patch updates arrive as one weekly PR; majors stay separate.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+
+  # Workflow actions (the shared gate workflow tracks @main and is not pinned).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns: ["*"]

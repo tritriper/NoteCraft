@@ -1,0 +1,16 @@
+[package]
+name = "notecraft-ui-egui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "NoteCraft user interface built on egui"
+
+[lints]
+workspace = true
+
+# egui, eframe, winit and rfd are added by US-L0-07; this is the only crate allowed to depend on them.
+[dependencies]
+notecraft-engine = { workspace = true }
+notecraft-model = { workspace = true }

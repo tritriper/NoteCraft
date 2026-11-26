@@ -1,0 +1,18 @@
+[package]
+name = "notecraft-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "NoteCraft engine: the editing session, undo and redo, the command registry and the parity catalog"
+
+[lints]
+workspace = true
+
+[dependencies]
+notecraft-model = { workspace = true }
+notecraft-md = { workspace = true }
+notecraft-query = { workspace = true }
+notecraft-store = { workspace = true }
+notecraft-search = { workspace = true }
