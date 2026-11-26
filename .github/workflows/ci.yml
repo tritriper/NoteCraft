@@ -1,19 +1,19 @@
 name: CI
 
-# Quality gates for every push to main and develop and every pull request (`cargo xtask ci`:
+# Quality gates for every push to main and dev and every pull request (`cargo xtask ci`:
 # fmt, clippy -D warnings, tests, assets, layers, never-crash lints, wasm build of the non-UI
 # crates), through the Craft suite's shared gate workflow in storytold/craft-common-actions
 # (AGENTS.md rule 17), on Linux, macOS and Windows.
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push to a PR branch cancels its older run; every push to main or develop runs to the end.
+# A newer push to a PR branch cancels its older run; every push to main or dev runs to the end.
 concurrency:
   group: ci-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
