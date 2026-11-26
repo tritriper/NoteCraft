@@ -37,13 +37,9 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **A** agent interfa
 - **Missing:** a test that calls every registered command with absurd parameters.
 - **Story:** US-L0-08.
 
-### 6. Shared agent rules not inserted with their integrity marker (Q)
-- **Missing:** the generated `craft-agents` block in AGENTS.md (it currently links the standard).
-- **Fix:** the owner runs the suite's `house_rules.py write-agents` (see ADR 0001).
-
 ## M1 — Pages
 
-### 7. No pages, blocks, links or search (F, FF)
+### 6. No pages, blocks, links or search (F, FF)
 - **Missing:** the page tree, the block editor (paragraphs, headings, lists, to-dos, quotes,
   callouts, code, dividers, toggles, images, simple tables), slash insertion, block reordering,
   page links and backlinks, full-text search, lossless Markdown round trip, pages through MCP.
@@ -51,7 +47,7 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **A** agent interfa
 
 ## M2 — Databases
 
-### 8. No databases (F, FF, P)
+### 7. No databases (F, FF, P)
 - **Missing:** databases whose rows are pages, typed properties, the table view, sort/filter/group
   and saved views, relations, rollups, the formula subset, Git-mergeable storage with a rebuildable
   cache, databases through MCP.
@@ -59,21 +55,21 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **A** agent interfa
 
 ## M3 — Tasks and views
 
-### 9. No tasks or task views (F, U, A)
+### 8. No tasks or task views (F, U, A)
 - **Missing:** the Tasks template, board, list and calendar views, links to `.craft` items and
   commits, the agent task workflow, "My tasks", due-date reminders.
 - **Stories:** US-L3-01 to US-L3-08.
 
 ## M4 — Import and export
 
-### 10. No import or export (FF)
+### 9. No import or export (FF)
 - **Missing:** import of the reference product's Markdown + CSV export and of Markdown folders;
   export to Markdown, CSV, HTML and PDF.
 - **Stories:** US-L4-01 to US-L4-05.
 
 ## Cross-cutting
 
-### 11. No localisation, accessibility pass or performance budget yet (U, P)
+### 10. No localisation, accessibility pass or performance budget yet (U, P)
 - **Missing:** strings through craft-i18n, the accessibility checks of the suite standard, and
   measured performance budgets (targets to confirm in the spec: 10,000 pages, 100,000 rows).
 - **When:** from M1, with the first UI.
