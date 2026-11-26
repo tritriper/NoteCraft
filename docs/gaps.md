@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-11-25 · **Last updated:** 2026-11-25 · **Change:** major (first version, at the scaffold)
+> **Last reviewed:** 2026-11-26 · **Last updated:** 2026-11-26 · **Change:** major (regrouped by the lots of the behaviour spec, draft 2)
 
 Everything known to be missing, grouped by the milestone that delivers it
 ([roadmap.md](roadmap.md)). This is the work list: when a story lands, remove or shrink its entry
@@ -10,66 +10,45 @@ usual detail (missing, evidence, impact, estimate) once development starts.
 Kinds: **F** feature · **U** UI/UX · **FF** file format · **A** agent interface · **P** performance ·
 **S** stability · **Q** quality gates.
 
-## M0 — Foundations
+## M0 — Foundations (L0)
 
-### 1. No session, undo or command registry (F, A)
-- **Missing:** the engine `Session`, undo/redo, the `CommandSpec` registry and its parity catalog.
-- **Story:** US-L0-02.
-
-### 2. No workspace on disk (FF)
-- **Missing:** creating and opening a workspace inside a `.craft` project; its manifest; stable ids
-  that survive renames, moves and Git merges.
-- **Story:** US-L0-03, US-L0-04. The `.craft` project format itself is not settled yet
+### 1. No engine, workspace or agent surfaces (F, A, FF)
+- **Missing:** session, undo and the command registry; workspace on disk; stable ids; CLI; MCP
+  server; control channel; atomic multi-file transactions and crash recovery; workspace lock;
+  benchmark harness; surface parity test; Markdown parser prototype; hostile-parameter sweep; the
+  egui window and the web build of the app.
+- **Stories:** US-L0-02 to US-L0-14. The `.craft` project format is not settled
   ([storytold/artcraft#2131](https://github.com/storytold/artcraft/issues/2131)), so workspace access
   goes behind an interface.
 
-### 3. No CLI commands, MCP server or control channel (A)
-- **Missing:** `notecraft run <command>`, `notecraft commands`, `notecraft mcp` with mandatory
-  automation roots; today the binary only prints its version.
-- **Story:** US-L0-05, US-L0-06.
+## M1 — Pages, core (L1a)
 
-### 4. No user interface and no web build of the app (U)
-- **Missing:** the egui window, the off-screen screenshot example and the desktop/web app shells.
-  The wasm check covers the non-UI library crates only.
-- **Story:** US-L0-07.
+### 2. No pages, blocks, links or search (F, FF, U)
+- **Missing:** the folder tree of pages, the block editor, links and backlinks, search, lossless
+  Markdown, pages through MCP, the application shell and keymap.
+- **Stories:** see [roadmap.md](roadmap.md#m1--l1a-pages-core).
 
-### 5. No hostile-input sweep (S, Q)
-- **Missing:** a test that calls every registered command with absurd parameters.
-- **Story:** US-L0-08.
+## M1.5 — Pages, robustness and finish (L1b)
 
-## M1 — Pages
+### 3. No resilience to merges and external edits; no accessibility or themes pass (S, U)
+- **Stories:** see [roadmap.md](roadmap.md#m15--l1b-pages-robustness-and-finish).
 
-### 6. No pages, blocks, links or search (F, FF)
-- **Missing:** the page tree, the block editor (paragraphs, headings, lists, to-dos, quotes,
-  callouts, code, dividers, toggles, images, simple tables), slash insertion, block reordering,
-  page links and backlinks, full-text search, lossless Markdown round trip, pages through MCP.
-- **Stories:** US-L1-01 to US-L1-12.
+## M2 — Databases (L2)
 
-## M2 — Databases
+### 4. No databases (F, FF, P)
+- **Stories:** see [roadmap.md](roadmap.md#m2--l2-databases).
 
-### 7. No databases (F, FF, P)
-- **Missing:** databases whose rows are pages, typed properties, the table view, sort/filter/group
-  and saved views, relations, rollups, the formula subset, Git-mergeable storage with a rebuildable
-  cache, databases through MCP.
-- **Stories:** US-L2-01 to US-L2-11.
+## M3 — Views (L3)
 
-## M3 — Tasks and views
+### 5. No board, list or calendar views; no Tasks template (F, U)
+- **Stories:** see [roadmap.md](roadmap.md#m3--l3-views).
 
-### 8. No tasks or task views (F, U, A)
-- **Missing:** the Tasks template, board, list and calendar views, links to `.craft` items and
-  commits, the agent task workflow, "My tasks", due-date reminders.
-- **Stories:** US-L3-01 to US-L3-08.
+## M4 — Interop (L4)
 
-## M4 — Import and export
+### 6. No import or export (FF)
+- **Stories:** see [roadmap.md](roadmap.md#m4--l4-interop).
 
-### 9. No import or export (FF)
-- **Missing:** import of the reference product's Markdown + CSV export and of Markdown folders;
-  export to Markdown, CSV, HTML and PDF.
-- **Stories:** US-L4-01 to US-L4-05.
+## Later (L5, V2)
 
-## Cross-cutting
-
-### 10. No localisation, accessibility pass or performance budget yet (U, P)
-- **Missing:** strings through craft-i18n, the accessibility checks of the suite standard, and
-  measured performance budgets (targets to confirm in the spec: 10,000 pages, 100,000 rows).
-- **When:** from M1, with the first UI.
+Agent-specific processes, in-app conflict resolution and the server edition (several users,
+login, web UI) are backlog, not gaps of v1.

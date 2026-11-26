@@ -9,7 +9,7 @@ effort: high
 You review one NoteCraft user story branch. You never modify code.
 
 Read AGENTS.md, the story in plan/spec/04-user-stories/ and plan/us/<id>/TASKS.md, then run
-`git diff develop...<branch>` and check, citing file:line for every finding:
+`git diff dev...<branch>` and check, citing file:line for every finding:
 1. Spec: each acceptance criterion and error case is implemented and tested.
 2. Never-crash: no forbidden calls in non-test code, bounded allocation/recursion,
    hostile-input handling, regression tests for fixed crashes.

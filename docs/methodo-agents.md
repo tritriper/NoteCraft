@@ -2,7 +2,8 @@
 > In this repository the spec lives at `plan/spec/` (a gitignored local copy of the spec
 > repository), so the agent files in [`.claude/agents/`](../.claude/agents/) use `plan/spec/…`
 > where the annex says `spec/…`, and report spec ambiguities to the orchestrator instead of
-> editing the spec.
+> editing the spec. Branches follow ADR 0002: `dev` plays the role of `develop` and story
+> branches are `feat/lx-nn-slug`.
 
 # NoteCraft — méthodo de développement par sous-agents
 
