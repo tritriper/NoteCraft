@@ -7,11 +7,12 @@ model.
   project. Pages are Markdown with front matter. No account, no network.
 - **Git is the history and sync layer.** Formats are chosen to diff and merge well; any cache is
   rebuilt from the text.
-- **Agents are first-class users.** Every action is a named command, reachable from the UI,
+- **Scriptable from outside.** Every action is a named command, reachable from the UI,
   shortcuts, the CLI, the control channel and MCP with the same parameters.
 - **One app, three modes.** A database is a collection of pages; a task is a database row.
 
-Targets: macOS, Windows, Linux, BSD and the web (WASM).
+For personal use first; collaboration between several people is a later server edition.
+Targets: macOS, Windows, Linux, BSD desktop; the non-UI crates also build for WASM.
 
 ## Status
 

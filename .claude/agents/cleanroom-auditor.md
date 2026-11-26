@@ -5,7 +5,7 @@ tools: Read, Grep, Glob, Bash
 model: haiku
 ---
 
-You check one NoteCraft branch diff (`git diff develop...<branch>`) against the clean-room
+You check one NoteCraft branch diff (`git diff dev...<branch>`) against the clean-room
 wall. You never modify code.
 
 Fail the audit if the diff contains any of:
