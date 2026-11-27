@@ -267,3 +267,37 @@ fn count_items_does_not_follow_symlinks() {
     let c = ws.count_items().unwrap();
     assert_eq!(c.pages, 0);
 }
+
+/// A folder below `base` whose absolute path is exactly `len` bytes (Linux: each part under NAME_MAX).
+#[cfg(target_os = "linux")]
+fn folder_of_path_length(base: &std::path::Path, len: usize) -> std::path::PathBuf {
+    let mut cur = base.to_path_buf();
+    loop {
+        let have = cur.as_os_str().len();
+        assert!(have + 3 <= len, "base path is too long for the test");
+        let rem = len - have;
+        let part = if rem > 202 { 200 } else { rem - 1 };
+        cur.push("d".repeat(part));
+        if part + 1 == rem {
+            break;
+        }
+    }
+    std::fs::create_dir_all(&cur).unwrap();
+    cur
+}
+
+// ADR 0005 #4: a create that fails after the staging folder exists leaves nothing behind.
+// The staging folder path fits under PATH_MAX, the files inside it do not.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_create_that_fails_after_staging_starts_leaves_nothing() {
+    let dir = TempDir::new();
+    let m = model("Doomed");
+    let staging_name = format!(".notecraft-new.{}.craft_tmp", m.id);
+    let staging_len = 4090;
+    let p = folder_of_path_length(dir.path(), staging_len - 1 - staging_name.len());
+    let before = tree(dir.path());
+    let e = Workspace::create(&Project::new(&p), m).unwrap_err();
+    assert!(matches!(e, StoreError::Io { .. }), "{e:?}");
+    assert_eq!(tree(dir.path()), before, "nothing may remain: no notecraft/ and no staging folder");
+}

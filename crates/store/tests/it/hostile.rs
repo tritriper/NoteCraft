@@ -76,9 +76,9 @@ fn cases() -> Vec<(String, Vec<u8>, Expect)> {
 
     for (label, id) in [
         ("lower case id", format!("\"{}\"", FIXTURE_ID.to_lowercase())),
-        ("nil id", "\"00000000-0000-0000-0000-000000000000\"".to_string()),
-        ("25 char id", "\"0190a1b2-c3d4-7e5f-8a6b-7c8d\"".to_string()),
-        ("8 first", "\"80000000-0000-7000-8000-000000000000\"".to_string()),
+        ("nil id", format!("\"{}\"", "0".repeat(26))),
+        ("25 char id", format!("\"{}\"", &FIXTURE_ID[..25])),
+        ("8 first", format!("\"8{}\"", "0".repeat(25))),
         ("number id", "7".to_string()),
         ("null id", "null".to_string()),
     ] {

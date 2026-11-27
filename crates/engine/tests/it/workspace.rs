@@ -172,6 +172,66 @@ fn a_failed_open_keeps_the_previous_workspace() {
     assert!(s.can_undo(), "a failed open must not clear the history");
 }
 
+// ADR 0005 #3: a refused or failed create keeps the previous workspace and its history.
+#[test]
+fn a_failed_create_keeps_the_previous_workspace() {
+    let dir = TempDir::new();
+    let a = dir.path().join("a");
+    let b = dir.path().join("b");
+    std::fs::create_dir_all(&a).unwrap();
+    std::fs::create_dir_all(&b).unwrap();
+    put_manifest(&b, b"{broken");
+    let mut s = bare_session();
+    let made = create(&mut s, &a);
+    write_ok(&mut s, &[("pages/a.md", "x")]);
+    let before = tree(dir.path());
+    // Refused (workspace_exists), on the open workspace and on another folder.
+    for p in [&a, &b] {
+        assert_eq!(code(&err(s.run("workspace.create", &path_param(p)))), "invalid_params");
+    }
+    // Invalid params.
+    assert_eq!(code(&err(s.run("workspace.create", &json!({"path": ""})))), "invalid_params");
+    assert_eq!(tree(dir.path()), before);
+    let i = info(&mut s).unwrap();
+    assert_eq!(i["workspace"], made["workspace"]);
+    assert!(s.can_undo(), "a failed create must not clear the history");
+}
+
+// ADR 0005 #3 and #4: a create that fails after staging started keeps the previous workspace.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_create_failing_after_staging_keeps_the_previous_workspace_and_leaves_nothing() {
+    let dir = TempDir::new();
+    let a = dir.path().join("a");
+    std::fs::create_dir_all(&a).unwrap();
+    let mut s = bare_session();
+    let made = create(&mut s, &a);
+    write_ok(&mut s, &[("pages/a.md", "x")]);
+
+    // Ids are 26 characters, so the staging folder name has a known length. Its path fits
+    // under PATH_MAX; the files inside it do not.
+    let staging_name_len = ".notecraft-new..craft_tmp".len() + 26;
+    let target = 4090 - 1 - staging_name_len;
+    let mut p = dir.path().join("deep");
+    loop {
+        let have = p.as_os_str().len();
+        let rem = target - have;
+        let part = if rem > 202 { 200 } else { rem - 1 };
+        p.push("d".repeat(part));
+        if part + 1 == rem {
+            break;
+        }
+    }
+    std::fs::create_dir_all(&p).unwrap();
+    let before = tree(dir.path());
+    let e = err(s.run("workspace.create", &path_param(&p)));
+    assert_eq!(code(&e), "io");
+    assert_short(&e);
+    assert_eq!(tree(dir.path()), before, "no notecraft/ and no staging folder may remain");
+    assert_eq!(info(&mut s).unwrap()["workspace"], made["workspace"]);
+    assert!(s.can_undo(), "a failed create must not clear the history");
+}
+
 // AT-L0-03-b (unix)
 #[cfg(unix)]
 #[test]
@@ -446,6 +506,23 @@ fn err_outside_roots() {
     std::fs::create_dir_all(&inside).unwrap();
     s.run("workspace.create", &path_param(&inside)).unwrap();
     open(&mut s, &inside).unwrap();
+}
+
+// The project folder itself is written (staging, rename), so it must be inside the write root.
+#[test]
+fn create_is_refused_when_only_the_workspace_folder_is_inside_the_roots() {
+    let dir = TempDir::new();
+    let p = project(&dir);
+    let root = p.join("notecraft");
+    std::fs::create_dir_all(&root).unwrap();
+    let before = tree(dir.path());
+    let mut s = bare_session();
+    s.set_roots(Some(Roots::new(&root, &root).unwrap()));
+    let e = err(s.run("workspace.create", &path_param(&p)));
+    assert_eq!(code(&e), "outside_roots");
+    assert!(e.details.contains_key("path"));
+    assert!(!s.is_open());
+    assert_eq!(tree(dir.path()), before, "nothing may be written in the project folder");
 }
 
 #[cfg(unix)]
