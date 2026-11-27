@@ -84,7 +84,9 @@ fn at_l0_03_a_create_makes_the_layout_and_opens() {
     assert!(!s.read_only());
     let path = PathBuf::from(made["path"].as_str().unwrap());
     assert!(path.ends_with("notecraft"), "{path:?}");
-    assert!(path.starts_with(&p));
+    // `create` returns the canonical folder; the temp folder may sit behind a symlink or a
+    // short name (macOS /var, Windows 8.3), so compare canonical forms.
+    assert!(path.starts_with(p.canonicalize().unwrap()), "{path:?}");
     assert!(path.join("workspace.json").is_file());
 }
 
