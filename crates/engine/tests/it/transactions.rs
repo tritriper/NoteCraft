@@ -649,3 +649,116 @@ fn a_clean_open_leaves_the_tree_hash_unchanged() {
     assert!(recovery(&opened).is_null());
     assert_eq!(tree_hash(&fx.ws), h);
 }
+
+// ---- review round 1 ----
+
+// Rule 18, required change 1: the open-time sweep must stay inside the write root.
+#[test]
+fn open_with_roots_on_the_workspace_folder_leaves_the_project_folder_alone() {
+    let fx = move_fixture();
+    let stray = fx.project.join(".notecraft-new.OTHER.craft_tmp");
+    std::fs::create_dir_all(&stray).unwrap();
+    std::fs::write(stray.join("precious.md"), "keep me").unwrap();
+    let outside =
+        |fx: &Fixture| -> Vec<String> { tree(&fx.project).into_keys().filter(|k| k != "notecraft" && !k.starts_with("notecraft/")).collect() };
+    let before = outside(&fx);
+    assert!(before.contains(&".notecraft-new.OTHER.craft_tmp/precious.md".to_string()));
+
+    let mut s = bare_session();
+    s.set_roots(Some(Roots::new(&fx.ws, &fx.ws).unwrap()));
+    let opened = s.run("workspace.open", &path_param(&fx.project)).unwrap();
+    assert_eq!(opened["readOnly"], json!(false));
+    assert_eq!(outside(&fx), before, "nothing outside the write root is touched");
+    assert_eq!(std::fs::read(stray.join("precious.md")).unwrap(), b"keep me");
+}
+
+// Required change 2: a handler reads the recovered bytes, not the half-applied ones.
+#[test]
+fn a_command_after_a_refused_rollback_reads_the_recovered_bytes() {
+    let r = reference();
+    let fx = clone_fixture(&r.base);
+    let path = "pages/old/p0.md";
+    // The 2nd target op fails and so does the first rollback write.
+    let (mut s, _) = flaky_append_session(&fx, &[r.h + 2, r.h + 3]);
+    let e = err_of(s.run("test.writeFiles", &move_params(5)));
+    assert!(e.details.contains_key("unrestored"), "{:?}", e.details);
+    assert_ne!(content(&fx.ws).get(path), r.before.get(path), "the crash left {path} changed");
+
+    s.run("test.append", &json!({ "path": path })).unwrap();
+    let mut expect = r.before.clone();
+    expect.get_mut(path).unwrap().extend_from_slice(SUFFIX.as_bytes());
+    assert_eq!(content(&fx.ws), expect, "the append is built on the recovered file, not the half-applied one");
+    assert!(journal_files(&fx.ws).is_empty());
+}
+
+// Required change 2: undo and redo recover before they compute their ops.
+#[test]
+fn undo_and_redo_run_a_pending_recovery_first() {
+    let r = reference();
+    let target = "pages/old/p0.md";
+    let original = r.before[target].clone();
+    let mut edited = original.clone();
+    edited.extend_from_slice(SUFFIX.as_bytes());
+    for redo in [false, true] {
+        let fx = clone_fixture(&r.base);
+        // Mutating attempts before the failing move: 1 edit, plus 1 undo when testing redo.
+        let prior = if redo { 2 } else { 1 };
+        let (mut s, log) = flaky_append_session(&fx, &[prior + r.h + 2, prior + r.h + 3]);
+        s.run("test.append", &json!({ "path": target })).unwrap();
+        assert_eq!(content(&fx.ws)[target], edited);
+        if redo {
+            s.run("edit.undo", &json!({})).unwrap();
+            assert_eq!(content(&fx.ws)[target], original);
+        }
+        assert_eq!(mutating(&log.lock().unwrap()).len(), prior);
+        let state = content(&fx.ws);
+        let e = err_of(s.run("test.writeFiles", &move_params(5)));
+        assert!(e.details.contains_key("unrestored"), "redo={redo}: {:?}", e.details);
+        assert_ne!(content(&fx.ws), state);
+
+        let (cmd, want) = if redo { ("edit.redo", &edited) } else { ("edit.undo", &original) };
+        s.run(cmd, &json!({})).unwrap();
+        let mut expect = state.clone();
+        expect.insert(target.to_string(), want.clone());
+        assert_eq!(content(&fx.ws), expect, "redo={redo}: {cmd} acts on the recovered tree");
+        assert!(journal_files(&fx.ws).is_empty(), "redo={redo}");
+    }
+}
+
+// Required change 3: a target recovery cannot read is a refusal, never "absent".
+#[test]
+fn recovery_refuses_a_created_target_it_cannot_read() {
+    let r = reference();
+    let cx = all_applied(&r);
+    let journal = Journal::parse(&head_bytes(&cx)).unwrap();
+    let created = journal.entries.iter().find(|e| e.before.is_none()).unwrap().path.clone();
+    let target = cx.ws.join(created.as_str());
+    assert!(target.is_file());
+    std::fs::remove_file(&target).unwrap();
+    std::fs::create_dir(&target).unwrap();
+    let h = tree_hash(&cx.ws);
+
+    let (_s, opened) = reopen(&cx);
+    assert_refused(&opened, "unreadable target");
+    assert_eq!(recovery(&opened)["reason"], json!("io"));
+    assert_eq!(tree_hash(&cx.ws), h, "no other entry is rolled back and the journal stays");
+    assert!(target.is_dir());
+    assert!(cx.ws.join(JOURNAL_HEAD).is_file());
+}
+
+// Optional 1 (mutant: a failed journal clear does not leave a recovery pending).
+#[test]
+fn a_failed_journal_clear_is_recovered_before_the_next_commit() {
+    let r = reference();
+    let fx = clone_fixture(&r.base);
+    // 2nd target op fails; the rollback of the 1st succeeds; the head removal fails.
+    let (mut s, log) = flaky_session(&fx, &[r.h + 2, r.h + 4], true);
+    err_of(s.run("test.writeFiles", &move_params(5)));
+    let ops = mutating(&log.lock().unwrap());
+    assert_eq!(ops[r.h + 3].1, JOURNAL_HEAD, "the failed 4th op after the head is its removal: {ops:?}");
+    assert_eq!(content(&fx.ws), r.before);
+    assert!(fx.ws.join(JOURNAL_HEAD).is_file(), "the journal is still there");
+
+    write_ok(&mut s, &[("pages/z.md", "z")]);
+    assert!(journal_files(&fx.ws).is_empty(), "the next commit cleared the old journal first");
+}

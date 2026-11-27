@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use notecraft_engine::{CmdResult, FileError, Files, Session};
+use notecraft_engine::{CmdResult, CommandSpec, Ctx, Field, FileError, Files, Handler, Kind, ParamsSchema, Session};
 use notecraft_store::{JOURNAL_HEAD, digest};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use crate::support::*;
 
@@ -339,4 +339,47 @@ pub fn crash_run(r: &Reference, k: usize) -> (Fixture, CmdResult) {
 
 pub fn crashed(r: &Reference, k: usize) -> Fixture {
     crash_run(r, k).0
+}
+
+// ---- review round 1: a read-modify-write command ----
+
+static APPEND_FIELDS: [Field; 1] = [Field { name: "path", kind: Kind::String { max_len: 256 }, required: true, description: "path" }];
+
+fn never_disabled(_: &Session) -> Option<&'static str> {
+    None
+}
+
+pub const SUFFIX: &str = "APPENDED\n";
+
+/// Reads the file, then stages its bytes plus a suffix: the shape of every later edit.
+fn append(ctx: &mut Ctx<'_>, p: &Map<String, Value>) -> CmdResult {
+    let path = p.get("path").and_then(Value::as_str).unwrap_or("");
+    let mut bytes = ctx.read(path)?.unwrap_or_default();
+    bytes.extend_from_slice(SUFFIX.as_bytes());
+    ctx.write(path, &bytes);
+    Ok(json!({}))
+}
+
+/// The test registry plus `test.append`.
+pub fn append_registry() -> notecraft_engine::Registry {
+    let mut r = registry();
+    r.register(CommandSpec {
+        id: "test.append",
+        label: "Append",
+        location: "Test > Append",
+        shortcut: None,
+        params: ParamsSchema(&APPEND_FIELDS),
+        mutates: true,
+        enabled: never_disabled,
+        run: Handler::Apply(append),
+    })
+    .unwrap();
+    r
+}
+
+/// Like `flaky_session`, with `test.append` registered.
+pub fn flaky_append_session(fx: &Fixture, fail: &[usize]) -> (Session, OpLog) {
+    let log: OpLog = Arc::new(Mutex::new(Vec::new()));
+    let files = FlakyFiles { inner: DirFiles(fx.ws.clone()), fail: fail.to_vec(), attempts: 0, journaled: true, log: Arc::clone(&log) };
+    (Session::with_files(append_registry(), Box::new(files)), log)
 }
