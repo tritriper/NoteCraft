@@ -13,3 +13,7 @@ workspace = true
 [dependencies]
 notecraft-model = { workspace = true }
 notecraft-md = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+craft-atomic = { workspace = true }
+craft-format = { workspace = true }

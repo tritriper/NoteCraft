@@ -26,8 +26,13 @@ notecraft-mcp = { path = "crates/mcp" }
 # L6
 notecraft-ui-egui = { path = "crates/ui-egui" }
 
-# external (tooling and the engine)
+# external (tooling, the engine and the store)
 serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+
+# craft-libs: every crate at one rev, merged on craft-libs main (shared rule 10)
+craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "110d4a794a899a562293a6e16c5645d908753da5", version = "=0.1.0" }
+craft-format = { git = "https://github.com/storytold/craft-libs", rev = "110d4a794a899a562293a6e16c5645d908753da5", version = "=0.1.0" }
 
 # external (model: ids)
 getrandom = { version = "0.4", default-features = false }
