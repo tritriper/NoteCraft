@@ -42,6 +42,17 @@ fn params_for(id: &str) -> Value {
     match id {
         "test.writeFiles" => writes(&[("pages/a.md", "x")]),
         "edit.undo" | "edit.redo" | "test.panics" => json!({}),
+        "test.appendLine" => json!({ "path": "pages/a.md", "line": "x" }),
+        // `go` names a folder that exists, so a handler that ran by mistake would not block.
+        "test.hold" => {
+            let tmp = std::env::temp_dir();
+            json!({
+                "ready": tmp.join("notecraft-hold-ready").to_string_lossy(),
+                "go": tmp.to_string_lossy(),
+                "path": "pages/a.md",
+                "text": "x"
+            })
+        }
         other => panic!("a new mutating command {other} needs params here"),
     }
 }

@@ -3,11 +3,13 @@
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use notecraft_model::Workspace as Model;
 
 use crate::count::{self, Counts};
 use crate::error::{CorruptReason, ManifestError, PathError, StoreError, clip};
+use crate::lock::{self, Holder, LockError, WriteLock};
 use crate::manifest::{FormatCheck, MANIFEST_MAX_BYTES, Manifest};
 use crate::path::RelPath;
 use crate::project::{Project, is_workspace_dir};
@@ -243,6 +245,18 @@ impl Workspace {
         }
     }
 
+    /// Takes the write lock, waiting at most `wait` (`Duration::ZERO`: one try). `me` is written
+    /// as the record. A read-only handle gives `LockError::ReadOnly`.
+    pub fn lock(&self, me: &Holder, wait: Duration) -> Result<WriteLock, LockError> {
+        lock::acquire(self, me, wait)
+    }
+
+    /// The current record, read without the lock (for messages). `None` when there is no
+    /// regular file at `LOCK_RECORD`. Never fails, writes nothing.
+    pub fn holder(&self) -> Option<Holder> {
+        lock::read_record(self)
+    }
+
     /// Counts pages, databases and rows below `pages/`, trashed items and their descendants
     /// excluded (ADR 0005 #13). `None` when a bound is hit or a folder cannot be read. Symlinks
     /// are not followed.
@@ -261,7 +275,7 @@ impl Workspace {
     /// symlinks: the deepest part that exists, resolved, must lie under the workspace folder. A
     /// symlink that cannot be resolved (dangling) is refused too, because a write through it
     /// would create its target.
-    fn confined(&self, path: &RelPath) -> Result<PathBuf, StoreError> {
+    pub(crate) fn confined(&self, path: &RelPath) -> Result<PathBuf, StoreError> {
         let full = self.dir.join(path.as_str());
         let outside = || StoreError::InvalidPath { path: path.as_str().to_string(), error: PathError::Absolute };
         let mut probe = full.clone();
@@ -314,6 +328,11 @@ fn build(staging: &Path, manifest: &Manifest) -> Result<(), StoreError> {
         let path = staging.join(name);
         fs::create_dir(&path).map_err(|e| io_error(&path, &e))?;
     }
+    // The persistent, empty lock file (ADR 0007 #4): created once, never deleted.
+    let cache = staging.join(".cache");
+    fs::create_dir(&cache).map_err(|e| io_error(&cache, &e))?;
+    let lock = cache.join("lock");
+    craft_atomic::write_new(&lock, &[]).map_err(|e| io_error(&lock, &e))?;
     Ok(())
 }
 

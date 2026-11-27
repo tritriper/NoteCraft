@@ -47,7 +47,8 @@ pub fn snapshot(dir: &TempDir) -> BTreeMap<String, Vec<u8>> {
                 walk(root, &p, out);
             } else {
                 let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
-                out.insert(rel, std::fs::read(&p).unwrap());
+                let bytes = if is_lock_file(&rel) { Vec::new() } else { std::fs::read(&p).unwrap() };
+                out.insert(rel, bytes);
             }
         }
     }
@@ -210,6 +211,46 @@ fn panics(ctx: &mut Ctx<'_>, _p: &Map<String, Value>) -> CmdResult {
     panic!("deliberate panic in a test command");
 }
 
+// ---- US-L0-11: commands that hold the lock or do a read-change-write ----
+
+static HOLD_FIELDS: [Field; 4] = [
+    Field { name: "ready", kind: Kind::String { max_len: 4096 }, required: true, description: "marker file created once the handler runs" },
+    Field { name: "go", kind: Kind::String { max_len: 4096 }, required: true, description: "marker file to wait for" },
+    Field { name: "path", kind: Kind::String { max_len: 256 }, required: true, description: "workspace path to write" },
+    Field { name: "text", kind: Kind::String { max_len: 4096 }, required: true, description: "content to write" },
+];
+
+static APPEND_LINE_FIELDS: [Field; 2] = [
+    Field { name: "path", kind: Kind::String { max_len: 256 }, required: true, description: "path" },
+    Field { name: "line", kind: Kind::String { max_len: 256 }, required: true, description: "line to append" },
+];
+
+/// Creates `ready` (a path outside the workspace), polls for `go` (at most 60 s), then stages
+/// `path = text`. The lock is held for as long as this handler runs.
+fn hold_handler(ctx: &mut Ctx<'_>, p: &Map<String, Value>) -> CmdResult {
+    let get = |k: &str| p.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    std::fs::write(get("ready"), "ready").unwrap();
+    let go = get("go");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !Path::new(&go).exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    ctx.write(&get("path"), get("text").as_bytes());
+    Ok(json!({}))
+}
+
+/// Reads the file, appends `line` and a newline, stages it: a read-change-write that loses
+/// updates when two writers are not serialised. (Not `test.append`, which `crash.rs` owns.)
+fn append_line(ctx: &mut Ctx<'_>, p: &Map<String, Value>) -> CmdResult {
+    let path = p.get("path").and_then(Value::as_str).unwrap_or("");
+    let line = p.get("line").and_then(Value::as_str).unwrap_or("");
+    let mut bytes = ctx.read(path)?.unwrap_or_default();
+    bytes.extend_from_slice(line.as_bytes());
+    bytes.push(b'\n');
+    ctx.write(path, &bytes);
+    Ok(json!({}))
+}
+
 pub fn spec(id: &'static str) -> CommandSpec {
     CommandSpec {
         id,
@@ -245,6 +286,28 @@ pub fn registry() -> Registry {
         mutates: false,
         enabled: never_disabled,
         run: Handler::Apply(read_file),
+    })
+    .unwrap();
+    r.register(CommandSpec {
+        id: "test.hold",
+        label: "Hold",
+        location: "Test › Hold",
+        shortcut: None,
+        params: ParamsSchema(&HOLD_FIELDS),
+        mutates: true,
+        enabled: never_disabled,
+        run: Handler::Apply(hold_handler),
+    })
+    .unwrap();
+    r.register(CommandSpec {
+        id: "test.appendLine",
+        label: "Append line",
+        location: "Test › Append line",
+        shortcut: None,
+        params: ParamsSchema(&APPEND_LINE_FIELDS),
+        mutates: true,
+        enabled: never_disabled,
+        run: Handler::Apply(append_line),
     })
     .unwrap();
     r.register(CommandSpec {
@@ -303,6 +366,12 @@ pub enum Entry {
 
 /// Every entry below `dir`, recursively, without following symlinks. Equal trees mean
 /// byte-identical files with the same modification times.
+/// `.cache/lock` is recorded as present with no bytes: its content means nothing, and Windows
+/// refuses to read a file another handle has locked (OS error 33).
+fn is_lock_file(rel: &str) -> bool {
+    rel == ".cache/lock" || rel.ends_with("/.cache/lock")
+}
+
 pub fn tree(dir: &Path) -> BTreeMap<String, Entry> {
     fn walk(root: &Path, cur: &Path, out: &mut BTreeMap<String, Entry>) {
         for e in std::fs::read_dir(cur).unwrap() {
@@ -315,7 +384,8 @@ pub fn tree(dir: &Path) -> BTreeMap<String, Entry> {
                 out.insert(rel, Entry::Dir);
                 walk(root, &p, out);
             } else {
-                out.insert(rel, Entry::File { bytes: std::fs::read(&p).unwrap(), mtime: meta.modified().unwrap() });
+                let bytes = if is_lock_file(&rel) { Vec::new() } else { std::fs::read(&p).unwrap() };
+                out.insert(rel, Entry::File { bytes, mtime: meta.modified().unwrap() });
             }
         }
     }

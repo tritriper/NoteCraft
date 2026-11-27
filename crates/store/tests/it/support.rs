@@ -35,6 +35,12 @@ pub enum Entry {
 }
 
 /// Every entry below `dir`, recursively, without following symlinks.
+/// `.cache/lock` is recorded as present with no bytes: its content means nothing, and Windows
+/// refuses to read a file another handle has locked (OS error 33).
+fn is_lock_file(rel: &str) -> bool {
+    rel == ".cache/lock" || rel.ends_with("/.cache/lock")
+}
+
 pub fn tree(dir: &Path) -> BTreeMap<String, Entry> {
     fn walk(root: &Path, cur: &Path, out: &mut BTreeMap<String, Entry>) {
         for e in std::fs::read_dir(cur).unwrap() {
@@ -47,7 +53,8 @@ pub fn tree(dir: &Path) -> BTreeMap<String, Entry> {
                 out.insert(rel, Entry::Dir);
                 walk(root, &p, out);
             } else {
-                out.insert(rel, Entry::File { bytes: std::fs::read(&p).unwrap(), mtime: meta.modified().unwrap() });
+                let bytes = if is_lock_file(&rel) { Vec::new() } else { std::fs::read(&p).unwrap() };
+                out.insert(rel, Entry::File { bytes, mtime: meta.modified().unwrap() });
             }
         }
     }
@@ -82,4 +89,33 @@ pub fn current_tag() -> String {
 
 pub fn newer_tag() -> String {
     format!("{}{}", notecraft_store::FORMAT_FAMILY, notecraft_store::FORMAT_VERSION + 1)
+}
+
+// ---- US-L0-11: a workspace to lock ----
+
+/// Creates a workspace in a project folder directly below `dir` and returns the project path.
+pub fn new_project(dir: &TempDir) -> PathBuf {
+    use notecraft_model::{IdGen, Settings, Workspace as Model};
+    let project = dir.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let id = IdGen::new().generate().unwrap();
+    let model =
+        Model { id, name: Some("Lock".to_string()), created: notecraft_store::format_created(id.timestamp_ms()), settings: Settings::default() };
+    notecraft_store::Workspace::create(&notecraft_store::Project::new(&project), model).unwrap();
+    project
+}
+
+/// A read-write handle on the workspace of `project`.
+pub fn open_rw(project: &Path) -> notecraft_store::Workspace {
+    notecraft_store::Workspace::open(&notecraft_store::Project::new(project), notecraft_store::OpenMode::ReadWrite).unwrap()
+}
+
+/// The workspace folder of `project`.
+pub fn ws_dir(project: &Path) -> PathBuf {
+    notecraft_store::Project::new(project).workspace_dir()
+}
+
+/// True when nothing (no file, folder or link) exists at `path`.
+pub fn absent(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_err()
 }

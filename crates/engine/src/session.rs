@@ -1,9 +1,10 @@
 //! The editing session: `run` is the one entry point for every command.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::time::Duration;
 
 use notecraft_model::IdGen;
-use notecraft_store::{JOURNAL_HEAD, is_reserved};
+use notecraft_store::{JOURNAL_HEAD, WriteLock, is_reserved};
 use serde_json::{Map, Value, json};
 
 use crate::ctx::{Ctx, Staged, no_workspace};
@@ -11,6 +12,7 @@ use crate::error::{CmdError, CmdResult, ErrorCode};
 use crate::files::{DiskFiles, Files};
 use crate::history::{Change, History, Step};
 use crate::journal::{BuildError, Planned, Recovery, arm, build, clear, recover, remove_blobs};
+use crate::lock::{LOCK_WAIT, lock_error, me};
 use crate::registry::{Handler, Registry};
 use crate::roots::{Roots, outside};
 use crate::workspace::{self, Opened};
@@ -28,6 +30,8 @@ pub struct Session {
     writable: bool,
     /// A rollback or a journal clear left something: the next commit recovers first (ADR 0006 #7).
     recovery_pending: bool,
+    /// How long a mutating command waits for another writer (ADR 0007 #8).
+    lock_wait: Duration,
 }
 
 impl Session {
@@ -42,6 +46,7 @@ impl Session {
             roots: None,
             writable: true,
             recovery_pending: false,
+            lock_wait: LOCK_WAIT,
         }
     }
 
@@ -52,6 +57,15 @@ impl Session {
     /// Confines `workspace.create` and `workspace.open` (CLI and MCP; `None` removes the limit).
     pub fn set_roots(&mut self, roots: Option<Roots>) {
         self.roots = roots;
+    }
+
+    /// How long a mutating command or a read-write open waits for another writer.
+    pub fn set_lock_wait(&mut self, wait: Duration) {
+        self.lock_wait = wait;
+    }
+
+    pub(crate) fn lock_wait(&self) -> Duration {
+        self.lock_wait
     }
 
     /// Whether a workspace was opened or created (not set by `with_files`).
@@ -139,9 +153,8 @@ impl Session {
         }
         match spec.run {
             Handler::Apply(handler) => {
-                if spec.mutates {
-                    self.recover_pending()?;
-                }
+                // Held until the step is recorded (ADR 0007 #1); released on any return or panic.
+                let _guard = if spec.mutates { self.locked(id)? } else { None };
                 let empty = Map::new();
                 let map = params.as_object().unwrap_or(&empty);
                 let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -167,9 +180,26 @@ impl Session {
         }
     }
 
-    /// Runs a pending recovery (ADR 0006 #7). A refusal fails with `io`/`recovery_pending`.
-    fn recover_pending(&mut self) -> Result<(), CmdError> {
-        if !self.recovery_pending {
+    /// Takes the write lock for command `id` (none when no workspace is open), then recovers
+    /// under it, and sweeps when the previous holder died without releasing (ADR 0007 #6, #7).
+    fn locked(&mut self, id: &str) -> Result<Option<WriteLock>, CmdError> {
+        let guard = match &self.workspace {
+            Some(ws) => Some(ws.lock(&me(id), self.lock_wait).map_err(lock_error)?),
+            None => None,
+        };
+        self.recover_pending(guard.is_some())?;
+        if let (Some(g), Some(ws)) = (&guard, &self.workspace)
+            && g.stale().is_some()
+        {
+            workspace::sweep(self.roots(), ws);
+        }
+        Ok(guard)
+    }
+
+    /// Runs a pending recovery (ADR 0006 #7); under the lock (`locked`) also when a head exists
+    /// that this session did not leave (ADR 0007 #7). A refusal fails with `io`/`recovery_pending`.
+    fn recover_pending(&mut self, locked: bool) -> Result<(), CmdError> {
+        if !self.recovery_pending && !locked {
             return Ok(());
         }
         let files: &mut dyn Files = self.files.as_deref_mut().ok_or_else(no_workspace)?;
@@ -186,7 +216,7 @@ impl Session {
 
     /// Undo (`undo` true) or redo the newest step, if every file still holds what it left.
     fn travel(&mut self, undo: bool) -> CmdResult {
-        self.recover_pending()?;
+        let _guard = self.locked(if undo { "edit.undo" } else { "edit.redo" })?;
         let files = self.files.as_deref().ok_or_else(no_workspace)?;
         let stack = if undo { &self.history.undo } else { &self.history.redo };
         let step = stack.back().ok_or_else(|| {
@@ -234,7 +264,7 @@ impl Session {
             return Ok(Vec::new());
         }
         self.write_gate()?;
-        self.recover_pending()?;
+        self.recover_pending(false)?;
         let files: &mut dyn Files = self.files.as_deref_mut().ok_or_else(no_workspace)?;
         let mut done: Vec<Staged> = Vec::new();
         let mut plan: Vec<Planned> = Vec::new();

@@ -1,7 +1,8 @@
-//! Acceptance tests of US-L0-02 (session, undo/redo, command registry), US-L0-03 (workspace) and US-L0-10 (transactions): one integration binary.
+//! Acceptance tests of US-L0-02 (session, undo/redo, command registry), US-L0-03 (workspace) US-L0-10 (transactions) and US-L0-11 (workspace lock): one integration binary.
 
 mod crash;
 mod failures;
+mod lock;
 mod params;
 mod registry;
 mod support;
