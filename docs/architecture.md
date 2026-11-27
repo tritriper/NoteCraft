@@ -97,7 +97,7 @@ read-change-write. A second writer waits a bounded time (`Session::set_lock_wait
 then the command fails with `disabled` and reason `locked`, naming the holder from the advisory record
 `.cache/lock.json`. A record found when the lock is taken means the last holder died: `workspace.open`
 reports it as `staleLock`, and recovery and the sweep run only while the lock is held. Reads never lock.
-A released lock leaves no file behind. Where the file system has no locks, writes are refused and a
+A released lock removes the record and keeps the empty lock file (`create` writes it, nothing deletes it). Where the file system has no locks, writes are refused and a
 read-only open still works.
 
 ## Testing and gates

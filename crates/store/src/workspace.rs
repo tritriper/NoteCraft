@@ -328,6 +328,11 @@ fn build(staging: &Path, manifest: &Manifest) -> Result<(), StoreError> {
         let path = staging.join(name);
         fs::create_dir(&path).map_err(|e| io_error(&path, &e))?;
     }
+    // The persistent, empty lock file (ADR 0007 #4): created once, never deleted.
+    let cache = staging.join(".cache");
+    fs::create_dir(&cache).map_err(|e| io_error(&cache, &e))?;
+    let lock = cache.join("lock");
+    craft_atomic::write_new(&lock, &[]).map_err(|e| io_error(&lock, &e))?;
     Ok(())
 }
 
