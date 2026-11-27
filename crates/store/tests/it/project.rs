@@ -84,6 +84,22 @@ fn locate_finds_the_project_from_either_folder() {
     assert!(before.iter().all(|(k, v)| after.get(k) == Some(v)), "something under proj/ changed");
 }
 
+// ADR 0005 #12: candidate order. A project folder that is itself named `notecraft`, holding a
+// workspace in `notecraft/` and an unrelated `workspace.json`, is the project, not a workspace
+// folder of its parent.
+#[test]
+fn a_project_named_notecraft_is_located_as_the_project() {
+    let dir = TempDir::new();
+    let p = dir.path().join("notecraft");
+    std::fs::create_dir(&p).unwrap();
+    Workspace::create(&Project::new(&p), model("n")).unwrap();
+    std::fs::write(p.join("workspace.json"), "{\"not\": \"ours\"}").unwrap();
+    let found = Project::locate(&p, |_| true).unwrap();
+    assert_eq!(found.dir().canonicalize().unwrap(), p.canonicalize().unwrap());
+    let ws = Workspace::open(&found, OpenMode::ReadWrite).unwrap();
+    assert_eq!(ws.project_dir(), p.canonicalize().unwrap());
+}
+
 // Rule 18: `may_read` is asked before any access below a candidate; a refusal gives `None`.
 #[test]
 fn locate_asks_before_it_touches_a_candidate() {
