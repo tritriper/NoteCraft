@@ -7,6 +7,7 @@
 //! the folder and reads and writes files inside it through [`RelPath`], which cannot leave it.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod count;
 mod error;
 mod format;
 mod journal;
@@ -16,6 +17,7 @@ mod project;
 mod sweep;
 mod workspace;
 
+pub use count::Counts;
 pub use error::{CorruptReason, ManifestError, PathError, StoreError};
 pub use format::{FORMAT_FAMILY, FORMAT_VERSION};
 pub use journal::{
@@ -24,6 +26,6 @@ pub use journal::{
 };
 pub use manifest::{FormatCheck, MANIFEST_MAX_BYTES, Manifest, format_created};
 pub use path::RelPath;
-pub use project::{Project, WORKSPACE_DIR};
+pub use project::{DEFAULT_NAME, Project, WORKSPACE_DIR};
 pub use sweep::Swept;
-pub use workspace::{Counts, MANIFEST, OpenMode, ReadOnlyReason, Workspace};
+pub use workspace::{MANIFEST, OpenMode, ReadOnlyReason, Workspace};

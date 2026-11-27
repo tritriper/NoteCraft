@@ -6,10 +6,11 @@ use std::path::{Path, PathBuf};
 
 use notecraft_model::Workspace as Model;
 
+use crate::count::{self, Counts};
 use crate::error::{CorruptReason, ManifestError, PathError, StoreError, clip};
 use crate::manifest::{FormatCheck, MANIFEST_MAX_BYTES, Manifest};
 use crate::path::RelPath;
-use crate::project::Project;
+use crate::project::{Project, is_workspace_dir};
 use crate::sweep::{self, Swept};
 
 /// The manifest's file name.
@@ -18,11 +19,7 @@ pub const MANIFEST: &str = "workspace.json";
 const GITIGNORE: &str = ".cache/\n";
 const GITATTRIBUTES: &str = "*.md text eol=lf\n*.json text eol=lf\n";
 /// Folders `create` makes. Git keeps no empty folders, so `open` tolerates any of them missing.
-const FOLDERS: [&str; 3] = ["pages", "databases", "attachments"];
-
-/// The count walk stops below this depth or after this many entries.
-const COUNT_MAX_DEPTH: usize = 64;
-const COUNT_MAX_ENTRIES: u64 = 1_000_000;
+const FOLDERS: [&str; 2] = ["pages", "attachments"];
 
 /// How to open a workspace.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -50,18 +47,15 @@ impl ReadOnlyReason {
     }
 }
 
-/// Pages and databases found by [`Workspace::count_items`].
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Counts {
-    pub pages: u64,
-    pub databases: u64,
-}
-
 /// An open workspace folder: a path plus the parsed manifest. It holds no OS handle.
 #[derive(Clone, Debug)]
 pub struct Workspace {
     /// Canonical, resolved once.
     dir: PathBuf,
+    /// The canonical project folder (as given, made absolute, when it cannot be resolved).
+    project: PathBuf,
+    /// The manifest's name, else the project's default name.
+    name: String,
     manifest: Manifest,
     read_only: Option<ReadOnlyReason>,
 }
@@ -79,6 +73,11 @@ fn is_absent(e: &io::Error) -> bool {
     matches!(e.kind(), io::ErrorKind::NotFound | io::ErrorKind::NotADirectory)
 }
 
+/// The canonical project folder, else the folder as given made absolute.
+fn resolved_project(project: &Project) -> PathBuf {
+    fs::canonicalize(project.dir()).unwrap_or_else(|_| std::path::absolute(project.dir()).unwrap_or_else(|_| project.dir().to_path_buf()))
+}
+
 fn refused(path: &Path, reason: &'static str) -> StoreError {
     StoreError::Refused { path: shown(path), reason }
 }
@@ -90,12 +89,19 @@ impl Workspace {
         let dir = project.dir();
         match fs::metadata(dir) {
             Ok(m) if m.is_dir() => {}
-            Ok(_) => return Err(refused(dir, "not_a_folder")),
-            Err(e) if is_absent(&e) => return Err(refused(dir, "missing")),
+            Ok(_) => return Err(StoreError::NotFound { path: shown(dir) }),
+            Err(e) if is_absent(&e) => return Err(StoreError::NotFound { path: shown(dir) }),
             Err(e) => return Err(io_error(dir, &e)),
+        }
+        if is_workspace_dir(dir) {
+            return Err(refused(dir, "workspace_exists"));
         }
         let target = project.workspace_dir();
         let replace_empty = check_target(&target)?;
+        let mut workspace = workspace;
+        if workspace.name.is_none() {
+            workspace.name = Some(project.default_name());
+        }
         let manifest = Manifest::new(workspace);
         sweep::remove_staging(dir);
         let staging = dir.join(format!(".notecraft-new.{}.craft_tmp", manifest.workspace.id));
@@ -113,7 +119,8 @@ impl Workspace {
         // Best effort: flush the project folder so the new entry survives a crash.
         let _ = craft_atomic::AtomicFs::sync_dir(&craft_atomic::RealFs, dir);
         let canonical = fs::canonicalize(&target).map_err(|e| io_error(&target, &e))?;
-        Ok(Workspace { dir: canonical, manifest, read_only: None })
+        let name = manifest.workspace.name.clone().unwrap_or_else(|| project.default_name());
+        Ok(Workspace { dir: canonical, project: resolved_project(project), name, manifest, read_only: None })
     }
 
     /// Opens an existing workspace. Writes nothing and creates no folder (AT-L0-03-d).
@@ -137,12 +144,23 @@ impl Workspace {
         } else {
             None
         };
-        Ok(Workspace { dir, manifest, read_only })
+        let name = manifest.workspace.name.clone().unwrap_or_else(|| project.default_name());
+        Ok(Workspace { dir, project: resolved_project(project), name, manifest, read_only })
     }
 
     /// The canonical workspace folder.
     pub fn dir(&self) -> &Path {
         &self.dir
+    }
+
+    /// The canonical project folder (as given, made absolute, when it cannot be resolved).
+    pub fn project_dir(&self) -> &Path {
+        &self.project
+    }
+
+    /// The manifest's name, else the project's default name (computed once, at open/create).
+    pub fn name(&self) -> &str {
+        &self.name
     }
 
     pub fn manifest(&self) -> &Manifest {
@@ -173,7 +191,7 @@ impl Workspace {
         if self.read_only.is_some() {
             return Err(StoreError::ReadOnly { path: shown(&self.dir) });
         }
-        Ok(sweep::sweep(&self.dir, project))
+        Ok(sweep::sweep(&self.dir, project.then_some(self.project.as_path())))
     }
 
     /// The bytes of a file, or `None` when it does not exist.
@@ -225,44 +243,11 @@ impl Workspace {
         }
     }
 
-    /// Counts the pages (`*.md` other than `database.md`) and databases (`database.md`) below
-    /// `pages/`. `None` when a bound is hit or a folder cannot be read. Symlinks are not followed.
+    /// Counts pages, databases and rows below `pages/`, trashed items and their descendants
+    /// excluded (ADR 0005 #13). `None` when a bound is hit or a folder cannot be read. Symlinks
+    /// are not followed.
     pub fn count_items(&self) -> Option<Counts> {
-        let root = self.dir.join("pages");
-        match fs::symlink_metadata(&root) {
-            Ok(m) if m.file_type().is_dir() => {}
-            Ok(_) => return None,
-            Err(e) if is_absent(&e) => return Some(Counts { pages: 0, databases: 0 }),
-            Err(_) => return None,
-        }
-        let mut counts = Counts { pages: 0, databases: 0 };
-        let mut seen: u64 = 0;
-        let mut stack = vec![(root, 0usize)];
-        while let Some((folder, depth)) = stack.pop() {
-            for entry in fs::read_dir(&folder).ok()? {
-                let entry = entry.ok()?;
-                seen += 1;
-                if seen > COUNT_MAX_ENTRIES {
-                    return None;
-                }
-                let kind = entry.file_type().ok()?;
-                if kind.is_dir() {
-                    if depth + 1 > COUNT_MAX_DEPTH {
-                        return None;
-                    }
-                    stack.push((entry.path(), depth + 1));
-                } else if kind.is_file() {
-                    let name = entry.file_name();
-                    let name = name.to_string_lossy();
-                    if name == "database.md" {
-                        counts.databases += 1;
-                    } else if name.ends_with(".md") {
-                        counts.pages += 1;
-                    }
-                }
-            }
-        }
-        Some(counts)
+        count::count(&self.dir)
     }
 
     fn writable(&self, path: &RelPath) -> Result<(), StoreError> {

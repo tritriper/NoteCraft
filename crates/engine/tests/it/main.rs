@@ -8,3 +8,4 @@ mod support;
 mod transactions;
 mod undo;
 mod workspace;
+mod workspace_gate12;

@@ -7,9 +7,10 @@ use crate::support::*;
 
 enum Expect {
     Err,
+    Ok,
     Any,
 }
-use Expect::{Any, Err as MustErr};
+use Expect::{Any, Err as MustErr, Ok as MustOk};
 
 fn json_with(format: &str, id: &str, name: &str, extra: &str) -> Vec<u8> {
     format!("{{\"format\": {format}, \"id\": {id}, \"name\": {name}{extra}}}").into_bytes()
@@ -49,7 +50,9 @@ fn cases() -> Vec<(String, Vec<u8>, Expect)> {
     add("lone surrogate in name", json_with(&cur, &good_id(), "\"\\ud800\"", ""), Any);
     add("NUL in name", json_with(&cur, &good_id(), "\"a\\u0000b\"", ""), Any);
     add("2 MiB name", json_with(&cur, &good_id(), &format!("\"{}\"", "n".repeat(2 << 20)), ""), Any);
-    add("name object", json_with(&cur, &good_id(), "{}", ""), MustErr);
+    // gate-1.2: `name` is optional, and an unusable one counts as missing.
+    add("name object", json_with(&cur, &good_id(), "{}", ""), MustOk);
+    add("name missing", format!("{{\"format\": {cur}, \"id\": {}}}", good_id()).into_bytes(), MustOk);
 
     for t in ["", "0", "-1", "1x", "99999999999", "99999999999999999999999999999999999999999"] {
         add(&format!("format {t}"), json_with(&tag(t), &good_id(), &name, ""), MustErr);
@@ -100,9 +103,10 @@ fn assert_short(msg: &str, label: &str) {
 fn manifest_parse_survives_hostile_bytes() {
     for (label, bytes, expect) in cases() {
         match (Manifest::parse(&bytes), expect) {
+            (Err(e), MustOk) => panic!("{label}: refused: {e:?}"),
             (Err(e), _) => assert_short(&e.message, &label),
             (Ok(_), MustErr) => panic!("{label}: accepted"),
-            (Ok(_), Any) => {}
+            (Ok(_), Any | MustOk) => {}
         }
     }
 }
@@ -115,10 +119,11 @@ fn workspace_open_survives_hostile_manifest_files() {
         put_manifest(dir.path(), &bytes);
         let before = tree(dir.path());
         match (Workspace::open(&Project::new(dir.path()), OpenMode::ReadWrite), expect) {
+            (Err(e), MustOk) => panic!("{label}: refused: {e:?}"),
             (Err(StoreError::Corrupt { error, .. }), _) => assert_short(&error.message, &label),
             (Err(e), _) => panic!("{label}: expected Corrupt, got {e:?}"),
             (Ok(_), MustErr) => panic!("{label}: accepted"),
-            (Ok(_), Any) => {}
+            (Ok(_), Any | MustOk) => {}
         }
         assert_eq!(tree(dir.path()), before, "{label}");
     }
@@ -179,4 +184,76 @@ fn error_messages_do_not_echo_long_input() {
     let Err(e) = Workspace::open(&Project::new(dir.path()), OpenMode::ReadWrite) else { panic!("accepted") };
     assert_short(&e.to_string(), "display");
     assert!(notecraft_store::RelPath::parse(&huge).unwrap_err().to_string().len() < 500);
+}
+
+// Hostile input: `count_items` over `.md` files of every shape returns, without panic or hang.
+#[test]
+fn count_items_survives_hostile_markdown_files() {
+    let dir = TempDir::new();
+    let project = Project::new(dir.path());
+    let ws = Workspace::create(&project, crate::sweep::model("n")).unwrap();
+    let pages = ws.dir().join("pages");
+    let mut unclosed = b"---\n".to_vec();
+    unclosed.extend(std::iter::repeat_n(b'a', 1 << 20));
+    let files: Vec<(&str, Vec<u8>)> = vec![
+        ("empty.md", vec![]),
+        ("dashes.md", b"---".to_vec()),
+        ("unclosed.md", unclosed),
+        ("binary.md", (0..=255u8).cycle().take(70_000).collect()),
+        ("bom-crlf.md", b"\xEF\xBB\xBF---\r\ntrashed: x\r\n---\r\n".to_vec()),
+    ];
+    for (name, bytes) in &files {
+        std::fs::write(pages.join(name), bytes).unwrap();
+    }
+    // A folder named like a database page is not a database.
+    std::fs::create_dir_all(pages.join("f/database.md")).unwrap();
+    #[cfg(unix)]
+    {
+        let fifo = pages.join("x.md");
+        assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let c = ws.count_items();
+        let _ = tx.send(c.map(|c| (c.pages, c.databases)));
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(30)).expect("count_items did not return");
+    if let Some((_, databases)) = got {
+        assert_eq!(databases, 0, "a folder is not a database page");
+    }
+}
+
+// Hostile input: `Project::locate` over odd paths gives a value or `None`, and writes nothing.
+#[test]
+fn locate_survives_hostile_paths() {
+    let dir = TempDir::new();
+    let before = tree(dir.path());
+    let paths: Vec<std::path::PathBuf> = vec![
+        "".into(),
+        "/".into(),
+        ".".into(),
+        "a".repeat(300).into(),
+        "a\u{0}b".into(),
+        dir.path().join("a".repeat(300)),
+        dir.path().join("a\u{0}b"),
+    ];
+    #[cfg(unix)]
+    let paths = {
+        let mut paths = paths;
+        let (a, b) = (dir.path().join("loop-a"), dir.path().join("loop-b"));
+        std::os::unix::fs::symlink(&b, &a).unwrap();
+        std::os::unix::fs::symlink(&a, &b).unwrap();
+        paths.push(a.clone());
+        paths.push(a.join("notecraft"));
+        paths
+    };
+    for p in &paths {
+        let found = Project::locate(p, |_| true);
+        if let Some(project) = found {
+            let _ = Workspace::open(&project, OpenMode::ReadOnly);
+        }
+    }
+    let after = tree(dir.path());
+    assert!(before.iter().all(|(k, v)| after.get(k) == Some(v)));
+    assert!(after.keys().all(|k| k.starts_with("loop-")), "locate wrote something: {:?}", after.keys().collect::<Vec<_>>());
 }

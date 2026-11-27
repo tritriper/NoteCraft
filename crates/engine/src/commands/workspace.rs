@@ -15,7 +15,7 @@ const PATH_MAX_CHARS: usize = 32_767;
 const NAME_MAX_CHARS: usize = 1_000;
 
 static CREATE_FIELDS: [Field; 2] = [
-    Field { name: "path", kind: Kind::String { max_len: PATH_MAX_CHARS }, required: true, description: "the project folder" },
+    Field { name: "path", kind: Kind::String { max_len: PATH_MAX_CHARS }, required: true, description: "the project folder (must exist)" },
     Field {
         name: "name",
         kind: Kind::String { max_len: NAME_MAX_CHARS },
@@ -25,7 +25,12 @@ static CREATE_FIELDS: [Field; 2] = [
 ];
 
 static OPEN_FIELDS: [Field; 2] = [
-    Field { name: "path", kind: Kind::String { max_len: PATH_MAX_CHARS }, required: true, description: "the project folder" },
+    Field {
+        name: "path",
+        kind: Kind::String { max_len: PATH_MAX_CHARS },
+        required: true,
+        description: "the project folder, or its notecraft folder",
+    },
     Field { name: "readOnly", kind: Kind::Bool, required: false, description: "open without allowing changes" },
 ];
 
@@ -45,10 +50,11 @@ fn info(ctx: &mut Ctx<'_>, _params: &Map<String, Value>) -> CmdResult {
     let reason = ws.read_only().map(|r| r.as_str());
     Ok(json!({
         "workspace": manifest.workspace.id.to_string(),
-        "name": manifest.workspace.name,
-        "path": ws.dir().to_string_lossy(),
+        "name": ws.name(),
+        "path": ws.project_dir().to_string_lossy(),
         "pages": counts.map(|c| c.pages),
         "databases": counts.map(|c| c.databases),
+        "rows": counts.map(|c| c.rows),
         "readOnly": reason.is_some(),
         "readOnlyReason": reason,
         "format": manifest.format,

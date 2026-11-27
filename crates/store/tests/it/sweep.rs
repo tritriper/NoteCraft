@@ -8,7 +8,7 @@ use crate::support::*;
 
 pub fn model(name: &str) -> Model {
     let id = IdGen::new().generate().unwrap();
-    Model { id, name: name.to_string(), created: format_created(id.timestamp_ms()), settings: Settings::default() }
+    Model { id, name: Some(name.to_string()), created: format_created(id.timestamp_ms()), settings: Settings::default() }
 }
 
 /// A workspace created in `<dir>/proj`; the project folder is `ws.dir().parent()`.

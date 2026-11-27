@@ -18,7 +18,8 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **A** agent interfa
   confined file access, and the network rules in `cargo xtask layers` and `lints`
   ([ADR 0005](adr/0005-workspace-on-disk.md)). **Still open there:** `conflicts` in the `workspace.open`
   result (L1), a web file-system backend (US-L0-07 or later), cleaning of staging folders and
-  `*.craft_tmp` files left by a crash (done in US-L0-10).
+  `*.craft_tmp` files left by a crash (done in US-L0-10). Spec gate-1.2 is done (D-43); trash
+  detection in the item count is a front-matter scan until the L1 index exists.
 - **Done (US-L0-10):** atomic multi-file commits with an undo journal in `.cache/journal/`, recovery on
   `workspace.open` and in a session, and the sweep of crash leftovers
   ([ADR 0006](adr/0006-multi-file-commit-journal.md)). **Still open there:** the lock before recovery

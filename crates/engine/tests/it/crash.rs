@@ -165,7 +165,7 @@ pub fn move_fixture() -> Fixture {
     let project = dir.path().join("proj");
     std::fs::create_dir_all(&project).unwrap();
     let made = bare_session().run("workspace.create", &path_param(&project)).unwrap();
-    let ws = PathBuf::from(made["path"].as_str().unwrap());
+    let ws = PathBuf::from(made["path"].as_str().unwrap()).join("notecraft");
     for i in 0..5 {
         dir.put(&format!("proj/notecraft/pages/old/p{i}.md"), &page_body(i));
     }

@@ -15,7 +15,7 @@ fn now_ms() -> u64 {
 
 fn model(name: &str) -> Model {
     let id = IdGen::new().generate().unwrap();
-    Model { id, name: name.to_string(), created: format_created(id.timestamp_ms()), settings: Settings::default() }
+    Model { id, name: Some(name.to_string()), created: format_created(id.timestamp_ms()), settings: Settings::default() }
 }
 
 fn rel(s: &str) -> RelPath {
@@ -41,7 +41,7 @@ fn at_l0_03_a_created_files_follow_the_format() {
     assert_eq!(parsed.check, notecraft_store::FormatCheck::Current);
     assert_eq!(parsed.notice, None);
     assert_eq!(parsed.workspace.id, m.id);
-    assert_eq!(parsed.workspace.name, "My notes");
+    assert_eq!(parsed.workspace.name.as_deref(), Some("My notes"));
     assert_eq!(parsed.workspace, ws.manifest().workspace);
 
     // `created` is an RFC 3339 UTC time (fixed width, so text order is time order) between
@@ -65,9 +65,11 @@ fn at_l0_03_a_created_files_follow_the_format() {
     let attrs = std::fs::read_to_string(folder.join(".gitattributes")).unwrap();
     assert!(attrs.lines().any(|l| l == "*.md text eol=lf"));
     assert!(attrs.lines().any(|l| l == "*.json text eol=lf"));
-    for sub in ["pages", "databases", "attachments"] {
+    for sub in ["pages", "attachments"] {
         assert!(folder.join(sub).is_dir(), "{sub}");
     }
+    // gate-1.2 (file-format §2): there is no `databases/` folder; databases live under `pages/`.
+    assert!(std::fs::symlink_metadata(folder.join("databases")).is_err(), "databases/ must not be made");
 }
 
 // AT-L0-03-a: create leaves the rest of the project alone and leaves no staging folder.
@@ -103,12 +105,14 @@ fn create_over_existing_workspace_is_refused_and_changes_nothing() {
 #[test]
 fn create_refusals_name_their_reason() {
     let dir = TempDir::new();
+    // gate-1.2 (AT-L0-03-g): a missing project folder, or one that is not a folder, is not_found.
     let missing = Project::new(dir.path().join("nope"));
-    assert!(matches!(Workspace::create(&missing, model("n")).unwrap_err(), StoreError::Refused { reason: "missing", .. }));
+    assert!(matches!(Workspace::create(&missing, model("n")).unwrap_err(), StoreError::NotFound { .. }));
+    assert!(!dir.path().join("nope").exists(), "create must not make the project folder");
 
     let file = dir.path().join("file");
     std::fs::write(&file, "x").unwrap();
-    assert!(matches!(Workspace::create(&Project::new(&file), model("n")).unwrap_err(), StoreError::Refused { reason: "not_a_folder", .. }));
+    assert!(matches!(Workspace::create(&Project::new(&file), model("n")).unwrap_err(), StoreError::NotFound { .. }));
 
     let project = dir.path().join("p");
     std::fs::create_dir_all(project.join("notecraft")).unwrap();
@@ -136,7 +140,7 @@ fn f_ws_04_project_maps_to_its_notecraft_folder() {
     assert_eq!(project.dir(), dir.path());
     put_manifest(dir.path(), valid_manifest(&current_tag()).as_bytes());
     let ws = Workspace::open(&project, OpenMode::ReadWrite).unwrap();
-    assert_eq!(ws.manifest().workspace.name, "Fixture");
+    assert_eq!(ws.name(), "Fixture");
     assert_eq!(ws.read_only(), None);
 }
 
@@ -158,13 +162,13 @@ fn open_writes_nothing_and_creates_no_folder() {
     let dir = TempDir::new();
     let project = Project::new(dir.path());
     Workspace::create(&project, model("n")).unwrap();
-    for sub in ["pages", "databases", "attachments"] {
+    for sub in ["pages", "attachments"] {
         std::fs::remove_dir(project.workspace_dir().join(sub)).unwrap();
     }
     let before = tree(dir.path());
     for mode in [OpenMode::ReadWrite, OpenMode::ReadOnly] {
         let ws = Workspace::open(&project, mode).unwrap();
-        assert_eq!(ws.count_items().map(|c| (c.pages, c.databases)), Some((0, 0)));
+        assert_eq!(ws.count_items().map(|c| (c.pages, c.databases, c.rows)), Some((0, 0, 0)));
         drop(ws);
         assert_eq!(tree(dir.path()), before);
     }
@@ -230,11 +234,11 @@ fn symlinks_cannot_lead_reads_or_writes_out_of_the_workspace() {
     std::fs::remove_dir(root.join("pages")).unwrap();
     std::os::unix::fs::symlink(&outside, root.join("pages")).unwrap();
     // A file link to a file outside.
-    std::os::unix::fs::symlink(outside.join("secret.md"), root.join("databases/link.md")).unwrap();
+    std::os::unix::fs::symlink(outside.join("secret.md"), root.join("attachments/link.md")).unwrap();
 
     let before = tree(&outside);
     assert!(matches!(ws.write(&rel("pages/a.md"), b"x"), Err(StoreError::InvalidPath { .. })));
-    assert!(matches!(ws.write(&rel("databases/link.md"), b"x"), Err(StoreError::InvalidPath { .. })));
+    assert!(matches!(ws.write(&rel("attachments/link.md"), b"x"), Err(StoreError::InvalidPath { .. })));
     assert!(matches!(ws.remove(&rel("pages/secret.md")), Err(StoreError::InvalidPath { .. })));
     assert!(matches!(ws.read(&rel("pages/secret.md")), Err(StoreError::InvalidPath { .. })));
     assert_eq!(tree(&outside), before);

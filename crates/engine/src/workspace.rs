@@ -84,8 +84,8 @@ fn create(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
     let dir = project_dir(params)?;
     let name = match params.get("name").and_then(Value::as_str) {
         Some(n) if n.trim().is_empty() => return Err(invalid("name", "name: the workspace name is empty")),
-        Some(n) => n.trim().to_string(),
-        None => default_name(&dir),
+        Some(n) => Some(n.trim().to_string()),
+        None => None,
     };
     let project = Project::new(dir);
     check_roots(session, &project, true)?;
@@ -93,20 +93,28 @@ fn create(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
     let model = Model { id, name, created: format_created(id.timestamp_ms()), settings: Settings::default() };
     let workspace = Workspace::create(&project, model).map_err(store_error)?;
     let writable = writable(session, workspace.dir());
-    let path = lossy(workspace.dir());
+    let path = lossy(workspace.project_dir());
     session.install(Some(Opened { workspace, writable }));
     Ok(json!({ "workspace": id.to_string(), "path": path }))
 }
 
 fn open(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
-    let project = Project::new(project_dir(params)?);
+    let given = project_dir(params)?;
+    // The read root decides which candidates may be looked at (rule 18); a refusal of all is
+    // `outside_roots`.
+    let may_read = |p: &Path| session.roots().is_none_or(|r| confine(p, r.read()).is_ok());
+    let Some(project) = Project::locate(&given, may_read) else {
+        return Err(
+            CmdError::new(ErrorCode::OutsideRoots, format!("{}: outside the allowed folders", lossy(&given))).with_detail("path", lossy(&given))
+        );
+    };
     check_roots(session, &project, false)?;
     let mode = if params.get("readOnly").and_then(Value::as_bool) == Some(true) { OpenMode::ReadOnly } else { OpenMode::ReadWrite };
     let mut workspace = Workspace::open(&project, mode).map_err(store_error)?;
     let writable = writable(session, workspace.dir());
     let mut recovery = Value::Null;
     // Staging folders live in the project folder: sweep them only when it is inside the write root.
-    let project_writable = session.roots().is_none_or(|r| confine(project.dir(), r.write()).is_ok());
+    let project_writable = session.roots().is_none_or(|r| confine(workspace.project_dir(), r.write()).is_ok());
     let sweep = |w: &Workspace| {
         let _ = if project_writable { w.sweep() } else { w.sweep_workspace() };
     };
@@ -139,7 +147,8 @@ fn open(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
     let reason = workspace.read_only().map(|r| r.as_str());
     let result = json!({
         "workspace": manifest.workspace.id.to_string(),
-        "name": manifest.workspace.name,
+        "name": workspace.name(),
+        "path": lossy(workspace.project_dir()),
         "readOnly": reason.is_some(),
         "readOnlyReason": reason,
         "notice": manifest.notice,
@@ -160,11 +169,6 @@ fn pending_head(workspace: &Workspace) -> Option<Value> {
         Ok(Some(bytes)) => Some(Journal::parse(&bytes).map_or(Value::Null, |j| json!(j.command))),
         Err(_) => Some(Value::Null),
     }
-}
-
-/// The project folder's last component, or `Untitled`.
-fn default_name(dir: &Path) -> String {
-    dir.file_name().map(|n| n.to_string_lossy().trim().to_string()).filter(|n| !n.is_empty()).unwrap_or_else(|| "Untitled".to_string())
 }
 
 /// The command error for a store failure (ADR 0005 error table).
