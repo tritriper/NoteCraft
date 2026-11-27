@@ -8,13 +8,23 @@ use crate::error::{CmdError, CmdResult, ErrorCode};
 use crate::schema::ParamsSchema;
 use crate::session::Session;
 
-/// How a command runs. `Undo` and `Redo` are implemented by the session itself.
+/// How a command runs. `Undo`, `Redo` and `Lifecycle` are implemented by the session itself.
 #[derive(Clone, Copy)]
 pub enum Handler {
     /// Reads and stages through the `Ctx`; the session commits.
     Apply(fn(&mut Ctx<'_>, &Map<String, Value>) -> CmdResult),
     Undo,
     Redo,
+    /// Opens, creates or closes the session's workspace (ADR 0005 #3).
+    Lifecycle(Lifecycle),
+}
+
+/// Which lifecycle command a `Handler::Lifecycle` runs.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Lifecycle {
+    Create,
+    Open,
+    Close,
 }
 
 /// One user-visible action.
@@ -78,7 +88,7 @@ impl Registry {
     /// The engine's own commands.
     pub fn builtin() -> Registry {
         let mut r = Registry { specs: Vec::new() };
-        for spec in commands::edit::specs() {
+        for spec in commands::edit::specs().into_iter().chain(commands::workspace::specs()) {
             // Built-in ids are valid and distinct (a unit test checks it).
             let _ = r.register(spec);
         }
@@ -133,5 +143,12 @@ mod tests {
         let r = Registry::builtin();
         assert!(r.get("edit.undo").is_some());
         assert!(r.get("edit.redo").is_some());
+    }
+
+    #[test]
+    fn builtin_ids_are_valid_and_distinct() {
+        let r = Registry::builtin();
+        let expected = commands::edit::specs().len() + commands::workspace::specs().len();
+        assert_eq!(r.list().len(), expected);
     }
 }
