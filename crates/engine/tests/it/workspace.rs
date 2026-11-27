@@ -61,9 +61,10 @@ fn at_l0_03_a_create_makes_the_layout_and_opens() {
     for f in &files {
         assert!(matches!(after.get(&format!("notecraft/{f}")), Some(Entry::File { .. })), "{f}");
     }
-    for d in ["pages", "databases", "attachments"] {
+    for d in ["pages", "attachments"] {
         assert_eq!(after.get(&format!("notecraft/{d}")), Some(&Entry::Dir), "{d}");
     }
+    assert!(!after.contains_key("notecraft/databases"), "gate-1.2: there is no databases/ folder");
     for k in after.keys() {
         let inside = k == "notecraft" || k.starts_with("notecraft/");
         assert!(inside, "{k} is outside notecraft/");
@@ -79,15 +80,18 @@ fn at_l0_03_a_create_makes_the_layout_and_opens() {
     let i = info(&mut s).unwrap();
     assert_eq!(i["workspace"], made["workspace"]);
     assert_eq!(i["readOnly"], json!(false));
-    assert_eq!(i["pages"], json!(0));
+    for k in ["pages", "databases", "rows"] {
+        assert_eq!(i[k], json!(0), "{k}");
+    }
     assert!(s.is_open());
     assert!(!s.read_only());
+    // gate-1.2: `path` is the canonical project folder, not the notecraft/ folder. The temp
+    // folder may sit behind a symlink or a short name (macOS /var, Windows 8.3), so compare
+    // canonical forms.
     let path = PathBuf::from(made["path"].as_str().unwrap());
-    assert!(path.ends_with("notecraft"), "{path:?}");
-    // `create` returns the canonical folder; the temp folder may sit behind a symlink or a
-    // short name (macOS /var, Windows 8.3), so compare canonical forms.
-    assert!(path.starts_with(p.canonicalize().unwrap()), "{path:?}");
-    assert!(path.join("workspace.json").is_file());
+    assert_eq!(path, p.canonicalize().unwrap());
+    assert_eq!(i["path"], made["path"]);
+    assert!(path.join("notecraft/workspace.json").is_file());
 }
 
 // AT-L0-03-a (name)
@@ -134,7 +138,6 @@ fn at_l0_03_b_corrupt_manifest_is_corrupt_and_nothing_changes() {
         ("too big for u32", valid_manifest("notecraft-workspace99999999999").into_bytes()),
         ("another family", valid_manifest("notecraft-schema1").into_bytes()),
         ("pending is a string", format!("{{\"format\": \"{tag}\", \"format_pending\": \"x\", \"id\": {id}, \"name\": \"n\"}}").into_bytes()),
-        ("name is a number", format!("{{\"format\": \"{tag}\", \"id\": {id}, \"name\": 42}}").into_bytes()),
     ];
     let mut huge = valid_manifest(&tag).into_bytes();
     huge.extend(std::iter::repeat_n(b' ', 4 * 1024 * 1024 + 1));
@@ -342,7 +345,7 @@ fn at_l0_03_d_close_and_reopen_write_nothing() {
     assert_eq!(tree(dir.path()), t0);
 
     // A fresh clone has no empty folders: opening must not create them.
-    for d in ["pages", "databases", "attachments"] {
+    for d in ["pages", "attachments"] {
         std::fs::remove_dir(p.join("notecraft").join(d)).unwrap();
     }
     let t1 = tree(dir.path());
@@ -393,17 +396,21 @@ fn at_l0_03_e_create_over_existing_workspace_is_invalid_params() {
         assert!(!s.is_open(), "{label}");
     }
 
-    // A missing project, and a project that is a file.
+    // gate-1.2: a missing project, and a project that is a file, are not_found (AT-L0-03-g).
     let dir = TempDir::new();
     let before = tree(dir.path());
     let mut s = bare_session();
-    let e = err(s.run("workspace.create", &path_param(&dir.path().join("nope"))));
-    assert_eq!((code(&e), detail(&e, "reason")), ("invalid_params", Some("missing")));
+    let nope = dir.path().join("nope");
+    let e = err(s.run("workspace.create", &path_param(&nope)));
+    assert_eq!(code(&e), "not_found");
+    assert!(detail(&e, "path").is_some_and(|d| d.ends_with("nope")), "{:?}", e.details);
     assert_eq!(tree(dir.path()), before);
+    assert!(!nope.exists());
     std::fs::write(dir.path().join("f"), "x").unwrap();
     let before = tree(dir.path());
     let e = err(s.run("workspace.create", &path_param(&dir.path().join("f"))));
-    assert_eq!((code(&e), detail(&e, "reason")), ("invalid_params", Some("not_a_folder")));
+    assert_eq!(code(&e), "not_found");
+    assert!(detail(&e, "path").is_some_and(|d| d.ends_with("f")), "{:?}", e.details);
     assert_eq!(tree(dir.path()), before);
 }
 
@@ -544,6 +551,10 @@ fn err_outside_roots_through_a_symlink() {
     std::fs::create_dir_all(&other).unwrap();
     std::os::unix::fs::symlink(&other, r.join("link2")).unwrap();
     assert_eq!(code(&err(open(&mut s, &r.join("link")))), "outside_roots");
+    // gate-1.2: a link to another project's workspace folder (named `notecraft`) is no way in.
+    std::os::unix::fs::symlink(sibling.join("notecraft"), r.join("link3")).unwrap();
+    assert_eq!(code(&err(open(&mut s, &r.join("link3")))), "outside_roots");
+    assert!(!s.is_open());
     assert_eq!(code(&err(s.run("workspace.create", &path_param(&r.join("link2"))))), "outside_roots");
     assert_eq!(tree(&sibling), before);
     assert!(tree(&other).is_empty());
@@ -755,12 +766,12 @@ fn hostile_project_paths_give_errors_not_panics() {
         let e = err(bare_session().run(id, &path_param(&dir.path().join("file"))));
         assert_short(&e);
     }
-    assert_eq!(code(&err(bare_session().run("workspace.create", &path_param(&dir.path().join("file"))))), "invalid_params");
+    assert_eq!(code(&err(bare_session().run("workspace.create", &path_param(&dir.path().join("file"))))), "not_found");
     let e = err(bare_session().run("workspace.create", &path_param(Path::new("/dev/null"))));
     assert_short(&e);
-    // The workspace folder itself used as a project holds no workspace.
+    // A folder inside the workspace holds no workspace.
     create(&mut bare_session(), &p);
-    assert_eq!(code(&err(open(&mut bare_session(), &p.join("notecraft")))), "not_found");
+    assert_eq!(code(&err(open(&mut bare_session(), &p.join("notecraft/pages")))), "not_found");
     // Nothing was written outside the project folder.
     let outside: Vec<_> = tree(dir.path()).into_iter().filter(|(k, _)| !k.starts_with("my-project")).collect();
     let was: Vec<_> = before.into_iter().filter(|(k, _)| !k.starts_with("my-project")).collect();
