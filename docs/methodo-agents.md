@@ -1,9 +1,8 @@
-> Committed copy of the team methodology (source: `METHODO.md`, 2026-11-25), kept verbatim below.
-> In this repository the spec lives at `plan/spec/` (a gitignored local copy of the spec
-> repository), so the agent files in [`.claude/agents/`](../.claude/agents/) use `plan/spec/…`
-> where the annex says `spec/…`, and report spec ambiguities to the orchestrator instead of
-> editing the spec. Branches follow ADR 0002: `dev` plays the role of `develop` and story
-> branches are `feat/lx-nn-slug`.
+> Committed copy of the team methodology (2026-11-27). In this repository the spec lives at
+> `plan/spec/` (a gitignored local copy of the spec repository), so the agent files in
+> [`.claude/agents/`](../.claude/agents/) use `plan/spec/…` where the annex says `spec/…`, and
+> report spec ambiguities to the orchestrator instead of editing the spec. Branches follow
+> ADR 0002: `dev` plays the role of `develop` and story branches are `feat/lx-nn-slug`.
 
 # NoteCraft — méthodo de développement par sous-agents
 
@@ -16,9 +15,12 @@ donne en annexe les fichiers `.claude/agents/*.md` prêts à poser dans le dép�
 
 ## 1. Principes
 
-1. **Deux salles, un mur.** La salle A (spec, seule à utiliser REA) et la salle B
-   (dev) sont deux dépôts ou dossiers distincts. Le dépôt de dev ne contient qu'une
-   copie de `spec/`. Aucun agent de la salle B ne lit `plan/rea/` ni la salle A.
+1. **Deux salles, un mur.** La salle A (spec) et la salle B (dev) sont deux dépôts
+   distincts. La salle A écrit la spec à partir de la documentation publique du
+   logiciel de référence et, si besoin, d'observations en boîte noire sur un espace
+   de test fictif ; elle décrit des comportements, jamais du code. Le dépôt de dev ne
+   contient qu'une copie de `spec/` (dans `plan/spec/`). Aucun agent de la salle B ne
+   lit les notes de la salle A.
 2. **Une US = une branche = un worktree = un agent dev.** Les agents dev travaillent
    en parallèle dans des worktrees isolés, chacun sur les crates que le lead tech lui
    a attribuées (règle WordCraft : un agent par crate, `CARGO_TARGET_DIR` séparé).
@@ -37,12 +39,12 @@ donne en annexe les fichiers `.claude/agents/*.md` prêts à poser dans le dép�
 |---|---|---|---|---|
 | **Product owner** | Toi | Valide CdC, lots, priorités ; accepte un lot fini ; pousse et ouvre les PR upstream | — | — |
 | **Orchestrateur** | Session Claude Code principale | Lit `plan/STATUS.md`, choisit les US prêtes, lance les sous-agents, tient le statut à jour, remonte les blocages | Écrire du code produit | inherit |
-| **Spec (salle A)** | Session séparée, autre dossier | Écrit et amende `spec/` ; seul à utiliser REA | Écrire du code ; voir le dépôt de dev | opus |
+| **Spec (salle A)** | Session séparée, autre dépôt | Écrit et amende `spec/` à partir de la documentation publique et d'observations en boîte noire | Écrire du code ; voir le dépôt de dev | opus |
 | **Lead tech** | Sous-agent | Architecture (crates, couches L0–L6), ADR, découpe une US en tâches, attribue les crates, tranche les désaccords dev/review | Implémenter une US ; fusionner | opus |
 | **Testeur** | Sous-agent | Écrit les tests d'acceptation d'une US *avant* le dev, à partir des Given/When/Then, et plante des mutants pour prouver qu'ils échouent | Écrire le code de production | sonnet |
 | **Dev** | Sous-agent, un par US, worktree isolé | Implémente l'US jusqu'à ce que les tests passent ; `cargo xtask ci` vert ; met à jour `NOTES.md` de l'US | Modifier les tests d'acceptation (il demande au testeur) ; toucher une crate non attribuée | sonnet |
 | **Reviewer** | Sous-agent, lecture seule, contexte neuf | Relit le diff contre une checklist (spec, never-crash, couches, clean-room, tests) ; approuve ou demande des changements | Modifier le code | opus |
-| **Auditeur clean-room** | Sous-agent, lecture seule | Passe le diff au crible du mur : marques tierces, termes de la denylist REA, textes copiés, assets non attribués | Modifier le code | haiku |
+| **Auditeur clean-room** | Sous-agent, lecture seule | Passe le diff au crible du mur : marques tierces, termes de `docs/cleanroom-denylist.txt`, textes copiés, assets non attribués | Modifier le code | haiku |
 | **Intégrateur (« master »)** | Sous-agent | Fusionne en série les branches approuvées dans `develop`, rebase, relance la CI complète, met à jour `ROADMAP.md` et la parité | Résoudre autre chose qu'un conflit trivial ; pousser vers un remote | sonnet |
 
 Le testeur et l'auditeur sont optionnels au départ, mais ce sont eux qui donnent de la
