@@ -56,9 +56,9 @@ characters in upper case. Lower case is accepted on read; other spellings (I/L/O
 derive from a title or a path, and nothing changes them. `IdGen` keeps ids from one session in
 creation order, even within one millisecond or when the clock goes back. It reads the time
 through the `Clock` port and randomness through the `Entropy` port, so it never panics on any
-target, wasm included. The session will own the generator (US-L0-03).
+target, wasm included. The session owns the generator (US-L0-03).
 
-### The workspace on disk ([ADR 0005](adr/0005-workspace-on-disk.md), US-L0-03, in progress)
+### The workspace on disk ([ADR 0005](adr/0005-workspace-on-disk.md), US-L0-03)
 
 A workspace is the folder `notecraft/` inside a project folder. `store::Project` is the one place
 that maps a project to that folder, so only it changes when the `.craft` project format is

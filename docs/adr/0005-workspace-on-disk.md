@@ -1,6 +1,6 @@
 # ADR 0005 — The workspace on disk: project access in the store, lifecycle in the session
 
-- **Status:** proposed (US-L0-03)
+- **Status:** accepted (US-L0-03)
 - **Date:** 2026-11-27
 - **Story:** US-L0-03, create and open a workspace in a `.craft` project (F-WS-01, F-WS-02,
   F-WS-04, F-GT-01; EF-01, ENF-01, ENF-02, ENF-12)
