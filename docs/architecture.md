@@ -1,9 +1,9 @@
 # NoteCraft architecture
 
-> **Last reviewed:** 2026-11-25 · **Last updated:** 2026-11-27 · **Change:** minor (model: stable ids)
+> **Last reviewed:** 2026-11-25 · **Last updated:** 2026-11-27 · **Change:** minor (workspace on disk: design, ADR 0005)
 
 How NoteCraft is built. At this stage (lot L0) the engine has the session, undo and the
-command registry, and the model has stable ids; the other crates are still empty. The behaviour spec is being written in a separate spec repository; once the lead tech
+command registry, and the model has stable ids; the store has the workspace on disk. The behaviour spec is being written in a separate spec repository; once the lead tech
 settles the architecture from it, this file becomes the committed, current summary (the longer
 working notes stay in the gitignored `plan/architecture.md`). Rules for working in the code are
 in [`AGENTS.md`](../AGENTS.md); decisions are in [`adr/`](adr/).
@@ -56,9 +56,21 @@ characters in upper case. Lower case is accepted on read; other spellings (I/L/O
 derive from a title or a path, and nothing changes them. `IdGen` keeps ids from one session in
 creation order, even within one millisecond or when the clock goes back. It reads the time
 through the `Clock` port and randomness through the `Entropy` port, so it never panics on any
-target, wasm included. The session will own the generator (US-L0-03).
+target, wasm included. The session owns the generator (US-L0-03).
 
-The rest of the data flow is written with the workspace and the file format (US-L0-03).
+### The workspace on disk ([ADR 0005](adr/0005-workspace-on-disk.md), US-L0-03)
+
+A workspace is the folder `notecraft/` inside a project folder. `store::Project` is the one place
+that maps a project to that folder, so only it changes when the `.craft` project format is
+settled. The store reads `workspace.json` with bounds (a regular file, at most 4 MiB). A manifest
+it cannot read is `corrupt`, and nothing is written. A manifest from a newer format opens the
+workspace read-only, and every mutating command then returns `read_only`. `workspace.create`
+builds the whole tree in a staging folder and renames it into place, so a failure leaves nothing
+behind and no existing file is overwritten. Opening and closing write nothing. After opening, every
+write goes through the session's commit path and undo: a `Files` adapter over the store keeps each
+path inside the workspace and writes it atomically with craft-libs' `craft-atomic` (temporary file, flush, rename). The format tag and newer-file detection come from craft-libs' `craft-format`. The CLI and MCP
+set automation roots; a path outside them is `outside_roots`. Crates below L5 cannot reach the
+network: `cargo xtask layers` and `cargo xtask lints` check it.
 
 ## Testing and gates
 

@@ -5,12 +5,39 @@
 //! - Every crate root (`src/lib.rs`, `src/main.rs`, `src/bin/*.rs`) denies, in a `#![deny(…)]`
 //!   or `#![forbid(…)]` attribute, all of [`NEVER_CRASH`]. Clippy then fails CI on any of them
 //!   in non-test code (clippy.toml allows them in tests).
+//! - No source file of the crates below L5 ([`NET_FREE_CRATES`]) mentions a socket API
+//!   ([`NET_WORDS`]): nothing below L5 may use the network (ADR 0005 #9).
 
 use std::path::{Path, PathBuf};
 
 /// The lints every production crate root must deny.
 pub const NEVER_CRASH: &[&str] =
     &["clippy::unwrap_used", "clippy::expect_used", "clippy::panic", "clippy::unimplemented", "clippy::todo", "clippy::unreachable"];
+
+/// Crates (directory names under `crates/`) whose sources must not use the network: L1 to L4.
+pub const NET_FREE_CRATES: &[&str] = &["model", "md", "query", "store", "search", "engine"];
+
+/// Words that mean a socket in a source line.
+pub const NET_WORDS: &[&str] = &["std::net", "TcpStream", "TcpListener", "UdpSocket", "ToSocketAddrs"];
+
+/// The 1-based lines of `source` that mention a socket API, in code or in a comment: a mention
+/// is still a sign that someone is about to use one.
+pub fn net_lines(source: &str) -> Vec<usize> {
+    source.lines().enumerate().filter(|(_, line)| NET_WORDS.iter().any(|w| line.contains(w))).map(|(i, _)| i + 1).collect()
+}
+
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut paths: Vec<PathBuf> = entries.filter_map(Result::ok).map(|e| e.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|x| x == "rs") {
+            out.push(path);
+        }
+    }
+}
 
 /// The lint names inside every `#![deny(…)]` and `#![forbid(…)]` inner attribute of `source`.
 pub fn denied_lints(source: &str) -> Vec<String> {
@@ -104,8 +131,26 @@ pub fn run(root: &Path) -> Result<(), String> {
             }
         }
     }
+    let mut net_checked = 0;
+    for name in NET_FREE_CRATES {
+        let mut files = Vec::new();
+        rust_files(&root.join("crates").join(name).join("src"), &mut files);
+        for path in files {
+            net_checked += 1;
+            let lines = net_lines(&read(&path)?);
+            if !lines.is_empty() {
+                let shown = path.strip_prefix(root).unwrap_or(&path).display().to_string();
+                let at: Vec<String> = lines.iter().map(ToString::to_string).collect();
+                problems.push(format!("{shown}: line {} uses a socket API; nothing below L5 may use the network", at.join(", ")));
+            }
+        }
+    }
     if problems.is_empty() {
-        println!("lints: unsafe code forbidden; {} crates and {roots_checked} crate roots deny {}", dirs.len(), NEVER_CRASH.join(", "));
+        println!(
+            "lints: unsafe code forbidden; {} crates and {roots_checked} crate roots deny {}; {net_checked} source files below L5 use no socket API",
+            dirs.len(),
+            NEVER_CRASH.join(", ")
+        );
         Ok(())
     } else {
         Err(format!("{} problem(s):\n  {}", problems.len(), problems.join("\n  ")))
@@ -139,6 +184,13 @@ mod tests {
     fn commented_out_or_outer_attribute_does_not_count() {
         assert_eq!(missing_lints(&format!("// {FULL}")).len(), NEVER_CRASH.len());
         assert_eq!(missing_lints("#[deny(clippy::unwrap_used)]\nfn f() {}").len(), NEVER_CRASH.len());
+    }
+
+    #[test]
+    fn std_net_in_l1_to_l4_source_is_refused() {
+        let src = "use std::io;\nuse std::net::TcpStream;\nfn f(_: &UdpSocket) {}\n// fine\nfn g<T: ToSocketAddrs>() {}\n";
+        assert_eq!(net_lines(src), vec![2, 3, 5]);
+        assert!(net_lines("use std::fs;\nlet network = 1; // not a socket\n").is_empty());
     }
 
     #[test]

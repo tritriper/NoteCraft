@@ -4,6 +4,8 @@
 //! dependency kind counts; a crate's dev-dependency on itself is fine).
 //! Rule B: only the crates in [`UI_ALLOWED`] may use a UI toolkit crate ([`UI_CRATES`]), whether
 //! directly (any dependency kind) or transitively through normal and build dependencies.
+//! Rule C: no crate in L1 to L4 reaches a network crate ([`NET_CRATES`]) through normal or build
+//! dependencies, directly or transitively (ADR 0005 #9: no request below L5).
 //!
 //! The rules run on a small graph model so they can be unit-tested; [`from_metadata`] builds it
 //! from `cargo metadata`.
@@ -44,6 +46,34 @@ pub const TABLE: &[(&str, Class)] = &[
 /// External crates that are a UI toolkit or windowing layer. Entries ending in `*` are prefixes.
 pub const UI_CRATES: &[&str] = &["egui*", "eframe", "winit", "rfd"];
 
+/// External crates that open sockets or speak a network protocol. Entries ending in `*` are
+/// prefixes. Rule C keeps them out of L1 to L4.
+pub const NET_CRATES: &[&str] = &[
+    "reqwest*",
+    "hyper*",
+    "ureq",
+    "curl*",
+    "isahc",
+    "attohttpc",
+    "surf",
+    "h2",
+    "h3*",
+    "quinn*",
+    "tungstenite*",
+    "tokio-tungstenite",
+    "socket2",
+    "mio",
+    "tokio",
+    "async-std",
+    "native-tls",
+    "rustls*",
+    "openssl*",
+    "web-sys",
+];
+
+/// The highest layer that rule C covers.
+const NET_FREE_UP_TO: u8 = 4;
+
 /// Workspace crates (short names) allowed to use [`UI_CRATES`]. Desktop and web app shells that
 /// embed the UI join this list when they land (US-L0-07).
 pub const UI_ALLOWED: &[&str] = &["ui-egui"];
@@ -59,11 +89,19 @@ pub fn classify(package: &str) -> Option<Class> {
     TABLE.iter().find(|(name, _)| *name == short).map(|(_, class)| *class)
 }
 
-fn is_ui_crate(name: &str) -> bool {
-    UI_CRATES.iter().any(|pattern| match pattern.strip_suffix('*') {
+fn matches_any(patterns: &[&str], name: &str) -> bool {
+    patterns.iter().any(|pattern| match pattern.strip_suffix('*') {
         Some(prefix) => name.starts_with(prefix),
         None => name == *pattern,
     })
+}
+
+fn is_ui_crate(name: &str) -> bool {
+    matches_any(UI_CRATES, name)
+}
+
+fn is_net_crate(name: &str) -> bool {
+    matches_any(NET_CRATES, name)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,6 +134,8 @@ pub enum Violation {
     Upward { krate: String, from: String, dep: String, to: String, kind: DepKind },
     /// Rule B: `path` runs from the offending workspace crate to the UI crate.
     Ui { krate: String, path: Vec<String> },
+    /// Rule C: `path` runs from the offending workspace crate to the network crate.
+    Net { krate: String, path: Vec<String> },
 }
 
 impl fmt::Display for Violation {
@@ -107,6 +147,9 @@ impl fmt::Display for Violation {
             }
             Violation::Ui { krate, path } => {
                 write!(f, "{krate} reaches a UI toolkit via {}: only {} may use one", path.join(" -> "), UI_ALLOWED.join(", "))
+            }
+            Violation::Net { krate, path } => {
+                write!(f, "{krate} reaches a network crate via {}: nothing below L5 may use the network", path.join(" -> "))
             }
         }
     }
@@ -167,6 +210,12 @@ pub fn check(graph: &Graph) -> Vec<Violation> {
         {
             violations.push(Violation::Ui { krate: node.name.clone(), path });
         }
+        // Rule C.
+        if matches!(class, Class::Layer(l) if l <= NET_FREE_UP_TO)
+            && let Some(path) = net_path(graph, index)
+        {
+            violations.push(Violation::Net { krate: node.name.clone(), path });
+        }
     }
     violations
 }
@@ -188,6 +237,27 @@ fn ui_path(graph: &Graph, start: usize) -> Option<Vec<String>> {
             parent.insert(dep, current);
             let Some(target) = graph.nodes.get(dep) else { continue };
             if is_ui_crate(&target.name) {
+                return Some(walk_back(graph, &parent, start, dep));
+            }
+            queue.push_back(dep);
+        }
+    }
+    None
+}
+
+/// The shortest path from `start` to a network crate through normal and build dependencies.
+fn net_path(graph: &Graph, start: usize) -> Option<Vec<String>> {
+    let mut parent: HashMap<usize, usize> = HashMap::new();
+    let mut queue = VecDeque::from([start]);
+    while let Some(current) = queue.pop_front() {
+        let node = graph.nodes.get(current)?;
+        for &(dep, kind) in &node.deps {
+            if kind == DepKind::Dev || dep == start || parent.contains_key(&dep) {
+                continue;
+            }
+            parent.insert(dep, current);
+            let Some(target) = graph.nodes.get(dep) else { continue };
+            if !target.workspace && is_net_crate(&target.name) {
                 return Some(walk_back(graph, &parent, start, dep));
             }
             queue.push_back(dep);
@@ -358,6 +428,50 @@ mod tests {
     #[test]
     fn a_dependency_dev_dependency_on_a_toolkit_is_not_ours() {
         let g = graph(&[("notecraft-model", true, &[("helper", Normal)]), ("helper", false, &[("rfd", Dev)]), ("rfd", false, &[])]);
+        assert!(check(&g).is_empty());
+    }
+
+    #[test]
+    fn rule_c_network_crate_below_l5_is_refused() {
+        let g = graph(&[
+            ("notecraft-store", true, &[("ureq", Normal)]),
+            ("ureq", false, &[]),
+            ("notecraft-model", true, &[("reqwest-blocking", Build)]),
+            ("reqwest-blocking", false, &[]),
+        ]);
+        let v = check(&g);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v.iter().all(|x| matches!(x, Violation::Net { .. })));
+    }
+
+    #[test]
+    fn rule_c_network_crate_in_l5_or_app_is_allowed() {
+        let g = graph(&[
+            ("notecraft-mcp", true, &[("tokio", Normal)]),
+            ("notecraft-cli", true, &[("hyper", Normal)]),
+            ("notecraft-ui-egui", true, &[("socket2", Normal)]),
+            ("tokio", false, &[]),
+            ("hyper", false, &[]),
+            ("socket2", false, &[]),
+        ]);
+        assert!(check(&g).is_empty());
+    }
+
+    #[test]
+    fn rule_c_transitive_network_crate_is_refused() {
+        let g = graph(&[
+            ("notecraft-engine", true, &[("helper", Normal)]),
+            ("helper", false, &[("deeper", Normal)]),
+            ("deeper", false, &[("rustls-pemfile", Build)]),
+            ("rustls-pemfile", false, &[]),
+        ]);
+        let v = check(&g);
+        assert!(matches!(&v[..], [Violation::Net { krate, path }] if krate == "notecraft-engine" && path.len() == 4), "{v:?}");
+    }
+
+    #[test]
+    fn rule_c_ignores_dev_dependencies_and_lookalike_names() {
+        let g = graph(&[("notecraft-engine", true, &[("tokio", Dev), ("tokio-util", Normal)]), ("tokio", false, &[]), ("tokio-util", false, &[])]);
         assert!(check(&g).is_empty());
     }
 

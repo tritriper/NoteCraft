@@ -14,7 +14,12 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **A** agent interfa
 
 ### 1. No engine, workspace or agent surfaces (F, A, FF)
 - **Done (US-L0-02):** session, undo/redo and the command registry ([ADR 0003](adr/0003-command-registry-and-undo.md)).
-- **Missing:** workspace on disk; CLI; MCP server; control channel; atomic multi-file transactions and crash recovery; workspace lock;
+- **Done (US-L0-03):** create, open, close and describe a workspace on disk, with the manifest codec,
+  confined file access, and the network rules in `cargo xtask layers` and `lints`
+  ([ADR 0005](adr/0005-workspace-on-disk.md)). **Still open there:** `conflicts` in the `workspace.open`
+  result (L1), a web file-system backend (US-L0-07 or later), cleaning of staging folders and
+  `*.craft_tmp` files left by a crash (US-L0-10).
+- **Missing:** CLI; MCP server; control channel; atomic multi-file transactions and crash recovery; workspace lock;
   benchmark harness; surface parity test; Markdown parser prototype; hostile-parameter sweep; the
   egui window and the web build of the app.
 - **Stories:** US-L0-02 to US-L0-14. The `.craft` project format is not settled

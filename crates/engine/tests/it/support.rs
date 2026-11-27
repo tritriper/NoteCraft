@@ -291,3 +291,58 @@ pub fn detail<'a>(e: &'a CmdError, key: &str) -> Option<&'a str> {
 pub fn read_via_command(s: &mut Session, path: &str) -> Value {
     s.run("test.readFile", &json!({ "path": path })).unwrap()["content"].clone()
 }
+
+// ---- US-L0-03: workspace fixtures ----
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Entry {
+    Dir,
+    File { bytes: Vec<u8>, mtime: std::time::SystemTime },
+    Link(PathBuf),
+}
+
+/// Every entry below `dir`, recursively, without following symlinks. Equal trees mean
+/// byte-identical files with the same modification times.
+pub fn tree(dir: &Path) -> BTreeMap<String, Entry> {
+    fn walk(root: &Path, cur: &Path, out: &mut BTreeMap<String, Entry>) {
+        for e in std::fs::read_dir(cur).unwrap() {
+            let p = e.unwrap().path();
+            let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
+            let meta = std::fs::symlink_metadata(&p).unwrap();
+            if meta.file_type().is_symlink() {
+                out.insert(rel, Entry::Link(std::fs::read_link(&p).unwrap()));
+            } else if meta.is_dir() {
+                out.insert(rel, Entry::Dir);
+                walk(root, &p, out);
+            } else {
+                out.insert(rel, Entry::File { bytes: std::fs::read(&p).unwrap(), mtime: meta.modified().unwrap() });
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(dir, dir, &mut out);
+    out
+}
+
+/// Makes `notecraft/` in the project and writes `workspace.json` with exactly these bytes.
+pub fn put_manifest(project: &Path, bytes: &[u8]) {
+    let dir = project.join("notecraft");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("workspace.json"), bytes).unwrap();
+}
+
+pub const FIXTURE_ID: &str = "01KB0A1B2C3D4E5F6G7H8J9KMN";
+
+/// A hand-written manifest with a fixed id and name and an unknown key `"x-extra": 1`.
+pub fn valid_manifest(format_tag: &str) -> String {
+    format!("{{\n  \"format\": \"{format_tag}\",\n  \"id\": \"{FIXTURE_ID}\",\n  \"name\": \"Fixture\",\n  \"x-extra\": 1\n}}\n")
+}
+
+/// A session with the test commands and no files until a workspace is opened.
+pub fn bare_session() -> Session {
+    Session::new(registry())
+}
+
+pub fn path_param(p: &Path) -> Value {
+    json!({ "path": p.to_str().unwrap() })
+}

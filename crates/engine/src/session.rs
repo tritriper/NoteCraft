@@ -2,29 +2,95 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use notecraft_model::IdGen;
 use serde_json::{Map, Value, json};
 
 use crate::ctx::{Ctx, Staged, no_workspace};
 use crate::error::{CmdError, CmdResult, ErrorCode};
-use crate::files::Files;
+use crate::files::{DiskFiles, Files};
 use crate::history::{Change, History, Step};
 use crate::registry::{Handler, Registry};
+use crate::roots::{Roots, outside};
+use crate::workspace::{self, Opened};
 
-/// A registry, the workspace files (optional) and the undo history.
+/// A registry, the workspace files (optional), the open workspace, the automation roots, the id
+/// generator and the undo history.
 pub struct Session {
     registry: Registry,
     files: Option<Box<dyn Files>>,
     history: History,
+    ids: IdGen,
+    workspace: Option<notecraft_store::Workspace>,
+    roots: Option<Roots>,
+    /// Whether the open workspace lies inside the write root (always true without roots).
+    writable: bool,
 }
 
 impl Session {
     /// A session without files: commands that must write are `disabled` (`no_workspace`).
     pub fn new(registry: Registry) -> Session {
-        Session { registry, files: None, history: History::default() }
+        Session { registry, files: None, history: History::default(), ids: IdGen::new(), workspace: None, roots: None, writable: true }
     }
 
     pub fn with_files(registry: Registry, files: Box<dyn Files>) -> Session {
-        Session { registry, files: Some(files), history: History::default() }
+        Session { files: Some(files), ..Session::new(registry) }
+    }
+
+    /// Confines `workspace.create` and `workspace.open` (CLI and MCP; `None` removes the limit).
+    pub fn set_roots(&mut self, roots: Option<Roots>) {
+        self.roots = roots;
+    }
+
+    /// Whether a workspace was opened or created (not set by `with_files`).
+    pub fn is_open(&self) -> bool {
+        self.workspace.is_some()
+    }
+
+    /// Whether the open workspace refuses changes.
+    pub fn read_only(&self) -> bool {
+        self.workspace.as_ref().is_some_and(|w| w.read_only().is_some())
+    }
+
+    pub(crate) fn workspace(&self) -> Option<&notecraft_store::Workspace> {
+        self.workspace.as_ref()
+    }
+
+    pub(crate) fn roots(&self) -> Option<&Roots> {
+        self.roots.as_ref()
+    }
+
+    pub(crate) fn ids_mut(&mut self) -> &mut IdGen {
+        &mut self.ids
+    }
+
+    /// Swaps in the new workspace state with one assignment each, and clears the history.
+    pub(crate) fn install(&mut self, opened: Option<Opened>) {
+        match opened {
+            Some(o) => {
+                self.files = Some(Box::new(DiskFiles(o.workspace.clone())));
+                self.workspace = Some(o.workspace);
+                self.writable = o.writable;
+            }
+            None => {
+                self.files = None;
+                self.workspace = None;
+                self.writable = true;
+            }
+        }
+        self.history = History::default();
+    }
+
+    /// The gate for commands that change files: read-only first, then the write root.
+    fn write_gate(&self) -> Result<(), CmdError> {
+        let Some(ws) = &self.workspace else { return Ok(()) };
+        if let Some(reason) = ws.read_only() {
+            return Err(CmdError::new(ErrorCode::ReadOnly, format!("the workspace is read-only ({})", reason.as_str().replace('_', " ")))
+                .with_detail("reason", reason.as_str()));
+        }
+        if !self.writable {
+            return Err(outside(ws.dir()));
+        }
+        Ok(())
     }
 
     pub fn registry(&self) -> &Registry {
@@ -50,6 +116,9 @@ impl Session {
             .get(id)
             .ok_or_else(|| CmdError::new(ErrorCode::UnknownCommand, format!("unknown command {id:?}")).with_detail("id", id))?;
         spec.params.validate(params)?;
+        if spec.mutates {
+            self.write_gate()?;
+        }
         let enabled = catch_unwind(AssertUnwindSafe(|| (spec.enabled)(self))).map_err(|_| CmdError::internal())?;
         if let Some(reason) = enabled {
             return Err(CmdError::disabled(id, reason));
@@ -73,6 +142,11 @@ impl Session {
             }
             Handler::Undo => self.travel(true),
             Handler::Redo => self.travel(false),
+            Handler::Lifecycle(which) => {
+                let empty = Map::new();
+                let map = params.as_object().unwrap_or(&empty);
+                catch_unwind(AssertUnwindSafe(|| workspace::run(self, which, map))).unwrap_or_else(|_| Err(CmdError::internal()))
+            }
         }
     }
 
@@ -116,6 +190,7 @@ impl Session {
         if ops.is_empty() {
             return Ok(Vec::new());
         }
+        self.write_gate()?;
         let files: &mut dyn Files = self.files.as_deref_mut().ok_or_else(no_workspace)?;
         let mut journal: Vec<Staged> = Vec::new();
         let outcome = catch_unwind(AssertUnwindSafe(|| apply(&mut *files, ops, &mut journal)));
