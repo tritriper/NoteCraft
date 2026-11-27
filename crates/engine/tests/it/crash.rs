@@ -198,20 +198,26 @@ pub fn clone_fixture(fx: &Fixture) -> Fixture {
     Fixture { dir, project, ws }
 }
 
-/// `.cache/lock` is recorded as present with no bytes: its content means nothing, and Windows
+/// `.local/lock` is recorded as present with no bytes: its content means nothing, and Windows
 /// refuses to read a file another handle has locked (OS error 33).
 fn is_lock_file(rel: &str) -> bool {
-    rel == ".cache/lock" || rel.ends_with("/.cache/lock")
+    rel == ".local/lock" || rel.ends_with("/.local/lock")
 }
 
-fn regular_files(root: &Path, cur: &Path, with_cache: bool, out: &mut BTreeMap<String, Vec<u8>>) {
+/// `.cache/` (rebuildable) and `.local/` (machine-local state) are outside the tree hash and the
+/// content (US-L0-10 definitions).
+fn is_machine_folder(rel: &str) -> bool {
+    rel == ".cache" || rel == ".local"
+}
+
+fn regular_files(root: &Path, cur: &Path, with_machine: bool, out: &mut BTreeMap<String, Vec<u8>>) {
     for e in std::fs::read_dir(cur).unwrap() {
         let p = e.unwrap().path();
         let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
         let meta = std::fs::symlink_metadata(&p).unwrap();
         if meta.is_dir() {
-            if with_cache || rel != ".cache" {
-                regular_files(root, &p, with_cache, out);
+            if with_machine || !is_machine_folder(&rel) {
+                regular_files(root, &p, with_machine, out);
             }
         } else if meta.is_file() {
             let bytes = if is_lock_file(&rel) { Vec::new() } else { std::fs::read(&p).unwrap() };
@@ -220,18 +226,18 @@ fn regular_files(root: &Path, cur: &Path, with_cache: bool, out: &mut BTreeMap<S
     }
 }
 
-/// Every regular file of the workspace folder except `.cache/`: path to bytes.
+/// Every regular file of the workspace folder except `.cache/` and `.local/`: path to bytes.
 pub fn content(ws: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut out = BTreeMap::new();
     regular_files(ws, ws, false, &mut out);
     out
 }
 
-/// SHA-256 over the sorted (path, bytes) of every regular file, `.cache/` included. Folders
-/// are ignored, as Git ignores them.
+/// SHA-256 over the sorted (path, bytes) of every regular file except `.cache/` and `.local/`
+/// (the US-L0-10 definition). Folders are ignored, as Git ignores them. Journals are compared
+/// through `local_files`.
 pub fn tree_hash(ws: &Path) -> String {
-    let mut all = BTreeMap::new();
-    regular_files(ws, ws, true, &mut all);
+    let all = content(ws);
     let mut buf = Vec::new();
     for (p, b) in &all {
         buf.extend_from_slice(p.as_bytes());
@@ -243,11 +249,25 @@ pub fn tree_hash(ws: &Path) -> String {
     digest(&buf)
 }
 
-/// Regular files under `.cache/journal/`.
-pub fn journal_files(ws: &Path) -> Vec<String> {
+/// The bytes of every regular file under `.local/` except the lock file: path to bytes.
+pub fn local_files(ws: &Path) -> BTreeMap<String, Vec<u8>> {
     let mut all = BTreeMap::new();
     regular_files(ws, ws, true, &mut all);
-    all.into_keys().filter(|k| k.starts_with(".cache/journal/")).collect()
+    all.into_iter().filter(|(k, _)| k.starts_with(".local/") && !is_lock_file(k)).collect()
+}
+
+/// Everything a "nothing was written" check must cover: the tree hash plus every file of
+/// `.local/` (journals, records), the lock file counted as present and empty. This is the old
+/// "tree hash with `.cache/`" moved to where the journal now lives.
+pub fn full_state(ws: &Path) -> (String, BTreeMap<String, Vec<u8>>) {
+    let mut all = BTreeMap::new();
+    regular_files(ws, ws, true, &mut all);
+    (tree_hash(ws), all.into_iter().filter(|(k, _)| k.starts_with(".local/")).collect())
+}
+
+/// Regular files under `.local/journal/`.
+pub fn journal_files(ws: &Path) -> Vec<String> {
+    local_files(ws).into_keys().filter(|k| k.starts_with(".local/journal/")).collect()
 }
 
 /// Every path in the workspace (files or folders) whose name contains `craft_tmp`.

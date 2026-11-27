@@ -62,6 +62,7 @@ fn at_l0_03_a_created_files_follow_the_format() {
 
     let ignore = std::fs::read_to_string(folder.join(".gitignore")).unwrap();
     assert!(ignore.lines().any(|l| l == ".cache/"));
+    assert!(ignore.lines().any(|l| l == ".local/"), "file-format 2: the lock and journal folder is not shared");
     let attrs = std::fs::read_to_string(folder.join(".gitattributes")).unwrap();
     assert!(attrs.lines().any(|l| l == "*.md text eol=lf"));
     assert!(attrs.lines().any(|l| l == "*.json text eol=lf"));
@@ -304,4 +305,17 @@ fn a_create_that_fails_after_staging_starts_leaves_nothing() {
     let e = Workspace::create(&Project::new(&p), m).unwrap_err();
     assert!(matches!(e, StoreError::Io { .. }), "{e:?}");
     assert_eq!(tree(dir.path()), before, "nothing may remain: no notecraft/ and no staging folder");
+}
+
+// File-format §2: `.cache/` (rebuildable) and `.local/` (lock, journal) are never committed.
+#[test]
+fn create_writes_a_gitignore_listing_cache_and_local() {
+    let dir = TempDir::new();
+    let project = dir.path().join("proj");
+    std::fs::create_dir_all(&project).unwrap();
+    let ws = Workspace::create(&Project::new(&project), crate::sweep::model("Ignore")).unwrap();
+    let ignore = std::fs::read_to_string(ws.dir().join(".gitignore")).unwrap();
+    for line in [".cache/", ".local/"] {
+        assert!(ignore.lines().any(|l| l == line), "{line} missing from {ignore:?}");
+    }
 }

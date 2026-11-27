@@ -1,6 +1,9 @@
 # ADR 0006 — Multi-file commits: an undo journal in `.cache/journal/`, recovery on open
 
-- **Status:** accepted (US-L0-10)
+- **Status:** accepted (US-L0-10); #1, #3 to #7 and #10 superseded on 2026-11-27 for spec gate-1.5
+  (D-45) by [ADR 0008](0008-transactions-and-lock-follow-gate-1-5.md) (see "Amendments").
+  The journal moves to `.local/journal/` in rework R1; the replacement protocol lands in rework
+  R2, and until then #1 and #3 to #7 still describe the code.
 - **Date:** 2026-11-27
 - **Story:** US-L0-10, atomic multi-file transactions and crash recovery (F-CMD-10; ENF-03,
   ENF-12)
@@ -72,3 +75,30 @@ consuming application".
 - The `batch` command of MCP (commands.md §1, "one step") must commit through one journal.
 - The symlink check-then-use window of ADR 0005 is not narrowed here; that is left to US-L0-11
   (one writer) and to a later craft-libs API that opens files relative to a folder handle.
+
+## Amendments
+
+### 2026-11-27 — spec gate-1.5 (D-45, notecraft-spec `4505406`)
+
+The spec now fixes the transaction protocol (SPEC §5.0.6) and the machine-local state
+(file-format §9.1), and it differs from this ADR on the main point: after the commit point a
+journal is **replayed** (forward), not rolled back. [ADR 0008](0008-transactions-and-lock-follow-gate-1-5.md)
+replaces:
+
+- #1 (undo journal) by an intent journal that is replayed (ADR 0008 #5, #6);
+- #3 (`.cache/journal/`) by `.local/journal/<txid>.json`; `.cache/` holds nothing recovery needs
+  (ADR 0008 #1);
+- #4 (blobs, head, commit point at the head removal) by staged temporaries beside their targets
+  and the commit point at the journal write; a failure after the commit point is undone by a
+  compensating transaction (ADR 0008 #5, #13);
+- #5 (`head.json` format) by the journal format of ADR 0008 #7;
+- #6 (all-or-nothing rollback on open) by per-operation replay, `recovery.failed` and
+  `readOnlyReason: "recovery"` (ADR 0008 #6, #11);
+- #7 (`io`/`recovery_pending`) by a session that becomes read-only with reason `recovery`
+  (ADR 0008 #12);
+- #10 (the sweep) by a sweep that keeps the temporaries a remaining journal names and no longer
+  cleans `.cache/` (ADR 0008 #8).
+
+#2 (no journal for one change), #8 (reserved `.cache`, now with `.local`), #9 (`Files::journaled`)
+and #11 (flushing folders) stay. The consequences about two processes are closed by ADR 0007 and
+ADR 0008 #9, #10.

@@ -20,17 +20,17 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **A** agent interfa
   result (L1), a web file-system backend (US-L0-07 or later), cleaning of staging folders and
   `*.craft_tmp` files left by a crash (done in US-L0-10). Spec gate-1.2 is done (D-43); trash
   detection in the item count is a front-matter scan until the L1 index exists.
-- **Done (US-L0-10):** atomic multi-file commits with an undo journal in `.cache/journal/`, recovery on
+- **Done (US-L0-10):** atomic multi-file commits with an undo journal in `.local/journal/`, recovery on
   `workspace.open` and in a session, and the sweep of crash leftovers
   ([ADR 0006](adr/0006-multi-file-commit-journal.md)). **Still open there:** pruning of empty folders after a rollback (L1), MCP `batch` through one journal, the banner
   for `readOnlyReason: "recovery"` (US-L0-07), and the spec-room points (`recovery` in the `workspace.open`
-  result, `.cache/journal/` in file-format §9).
-- **Done (US-L0-11):** one writer at a time: an OS lock per mutating command in `.cache/lock`, a holder
+  result, settled by gate-1.5; the forward-replay journal is rework step R2, ADR 0008).
+- **Done (US-L0-11):** one writer at a time: an OS lock per mutating command in `.local/lock`, a holder
   record, a bounded wait, `disabled`/`locked`, stale-lock detection on open, recovery and the sweep under
   the lock ([ADR 0007](adr/0007-workspace-write-lock.md)). **Still open there:** forwarding a command
   through the running app (US-L0-09), MCP `batch` under one lock (US-L0-06), the UI wait and `staleLock`
-  banner (US-L0-07), and the spec-room points (`staleLock` in `workspace.open`, `cause` and `holder` in
-  `disabled`, `.cache/lock*` in file-format §9, locks on file systems that have none).
+  banner (US-L0-07), and the spec-room points (closed by gate-1.5: `staleLock` is a boolean, `disabled` carries `holder`, the lock is in `.local/`, no locks gives
+  read-only `noLock`; still open: `host` is `null` in L0, one-try open when the lock is busy, `noLock` for every lock failure at open; see ADR 0008).
 - **Missing:** CLI; MCP server; control channel;
   benchmark harness; surface parity test; Markdown parser prototype; hostile-parameter sweep; the
   egui window and the web build of the app.

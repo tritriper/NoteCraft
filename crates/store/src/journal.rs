@@ -13,10 +13,12 @@ pub use crate::format::JOURNAL_FAMILY;
 use crate::manifest::MANIFEST_MAX_BYTES;
 use crate::path::RelPath;
 
+/// The machine-local folder: lock, holder record and journal (ADR 0008 #1).
+pub const LOCAL_DIR: &str = ".local";
 /// The folder of the journal, inside the workspace.
-pub const JOURNAL_DIR: &str = ".cache/journal";
+pub const JOURNAL_DIR: &str = ".local/journal";
 /// The head file: while it exists, a commit is in flight (or was interrupted).
-pub const JOURNAL_HEAD: &str = ".cache/journal/head.json";
+pub const JOURNAL_HEAD: &str = ".local/journal/head.json";
 /// A journal lists at most this many entries.
 pub const JOURNAL_MAX_ENTRIES: usize = 100_000;
 /// `head.json` is at most this many bytes (the store's read cap).
@@ -40,10 +42,10 @@ pub fn digest(bytes: &[u8]) -> String {
     out
 }
 
-/// Whether the first segment of `path` is `.cache`, in any ASCII case: that folder belongs to the
-/// store, and a command may not stage a change there (ADR 0006 #8).
+/// Whether the first segment of `path` is `.cache` or `.local`, in any ASCII case: those folders
+/// belong to the store, and a command may not stage a change there (ADR 0006 #8, ADR 0008 #2).
 pub fn is_reserved(path: &str) -> bool {
-    path.split('/').next().is_some_and(|first| first.eq_ignore_ascii_case(".cache"))
+    path.split('/').next().is_some_and(|first| first.eq_ignore_ascii_case(".cache") || first.eq_ignore_ascii_case(".local"))
 }
 
 /// One file a commit changes: the digests of its bytes before and after (`None`: absent).
@@ -126,7 +128,7 @@ impl Journal {
                 .and_then(Value::as_str)
                 .filter(|p| !is_reserved(p))
                 .and_then(|p| RelPath::parse(p).ok())
-                .ok_or_else(|| field("path", "`path` is missing, is not a workspace path or lies in `.cache`"))?;
+                .ok_or_else(|| field("path", "`path` is missing, is not a workspace path or lies in `.cache` or `.local`"))?;
             if !seen.insert(path.clone()) {
                 return Err(field("path", "a path is listed twice"));
             }

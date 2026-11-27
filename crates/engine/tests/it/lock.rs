@@ -6,13 +6,13 @@
 //! writer. No test asserts a timing: a step that must succeed waits long, a step that must be
 //! refused waits zero.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use notecraft_engine::{CmdError, Roots, Session};
+use notecraft_engine::{CmdError, LOCK_WAIT, Roots, Session};
 use notecraft_store::{Holder, OpenMode, Project, Workspace, WriteLock};
 use serde_json::{Value, json};
 
@@ -109,25 +109,30 @@ fn hold_job(fx: &Fixture, path: &str, text: &str) -> (ChildGuard, PathBuf, PathB
 /// The store-level lock, as a second writer in this process.
 fn hold(project: &Path) -> WriteLock {
     let ws = Workspace::open(&Project::new(project), OpenMode::ReadWrite).unwrap();
-    ws.lock(&Holder { pid: Some(std::process::id()), command: Some("test.holder".into()), started: None }, LONG).unwrap()
+    ws.lock(&Holder { process: Some("cli".into()), pid: Some(std::process::id()), host: None, since: Some("2026-11-27T10:00:00Z".into()) }, LONG)
+        .unwrap()
 }
 
 /// Whether the holder record is left. The lock file itself is persistent (ADR 0007 #4): it is
 /// created once and never deleted, so only the record comes and goes.
 fn record_left(ws: &Path) -> bool {
-    std::fs::symlink_metadata(ws.join(".cache/lock.json")).is_ok()
+    std::fs::symlink_metadata(ws.join(".local/lock.json")).is_ok()
 }
 
-/// `.cache/lock` is a regular file of length 0 (nothing ever writes into it).
+/// `.local/lock` is a regular file of length 0 (nothing ever writes into it).
 fn lock_file_is_empty(ws: &Path) -> bool {
-    std::fs::symlink_metadata(ws.join(".cache/lock")).map(|m| m.is_file() && m.len() == 0).unwrap_or(false)
+    std::fs::symlink_metadata(ws.join(".local/lock")).map(|m| m.is_file() && m.len() == 0).unwrap_or(false)
 }
 
 fn assert_locked(e: &CmdError) {
     assert_eq!(code(e), "disabled", "{e:?}");
     assert_eq!(detail(e, "reason"), Some("locked"));
-    assert_eq!(detail(e, "cause"), Some("held"));
-    assert!(e.details.contains_key("holder"), "the key is there even when the holder is unknown");
+    assert_eq!(detail(e, "cause"), None, "the holder is the whole story: there is no `cause`");
+    let holder = e.details.get("holder").expect("the key is there even when the holder is unknown");
+    if !holder.is_null() {
+        assert!(holder.get("pid").is_some_and(Value::is_u64), "a named holder has a pid: {holder}");
+        assert!(holder.get("process").is_some_and(Value::is_string), "a named holder has a process: {holder}");
+    }
     assert!(!e.message.is_empty() && e.message.len() < 500);
 }
 
@@ -164,13 +169,15 @@ fn at_l0_11_a_a_second_process_waits_then_is_refused_while_a_command_holds_the_l
     let (mut child, ready, go) = hold_job(&fx, "pages/child.md", "from the child");
     wait_for(&mut child, &ready);
 
-    let h0 = tree_hash(&fx.ws);
+    let h0 = full_state(&fx.ws);
+    let local0 = local_files(&fx.ws);
     let e = s.run("test.writeFiles", &writes(&[("pages/parent.md", "from the parent")])).unwrap_err();
     assert_locked(&e);
     assert_eq!(holder_pid(&e), Some(u64::from(child.id())), "the holder is the other process, not us");
     assert_ne!(holder_pid(&e), Some(u64::from(std::process::id())));
     assert!(!fx.ws.join("pages/parent.md").exists(), "a refused command writes nothing");
-    assert_eq!(tree_hash(&fx.ws), h0, "nothing changed on disk, `.cache/` included");
+    assert_eq!(full_state(&fx.ws), h0, "nothing changed on disk, `.local/` included");
+    assert_eq!(local_files(&fx.ws), local0, "the journal folder and the record are as they were");
     assert!(!s.can_undo(), "a refused command leaves no history step");
 
     std::fs::write(&go, "go").unwrap();
@@ -220,17 +227,17 @@ fn two_sessions_in_one_process_are_serialised() {
     assert!(b.can_undo());
 
     let guard = hold(&fx.project);
-    let h0 = tree_hash(&fx.ws);
+    let h0 = full_state(&fx.ws);
     let e = b.run("test.writeFiles", &writes(&[("pages/b.md", "b")])).unwrap_err();
     assert_locked(&e);
     assert_eq!(holder_pid(&e), Some(u64::from(std::process::id())));
-    assert_eq!(tree_hash(&fx.ws), h0);
+    assert_eq!(full_state(&fx.ws), h0);
 
     let e = b.run("edit.undo", &json!({})).unwrap_err();
     assert_locked(&e);
     assert!(b.can_undo(), "a refused undo leaves the history alone");
     assert_eq!(content(&fx.ws).get("pages/u.md"), Some(&b"undoable".to_vec()));
-    assert_eq!(tree_hash(&fx.ws), h0);
+    assert_eq!(full_state(&fx.ws), h0);
 
     drop(guard);
     b.set_lock_wait(LONG);
@@ -280,15 +287,15 @@ fn reads_and_read_only_opens_work_while_another_writer_holds_the_lock() {
     fx.dir.put("proj/notecraft/pages/r.md", "readable");
     let mut s = session_waiting(&fx, Duration::ZERO);
     let guard = hold(&fx.project);
-    let h0 = tree_hash(&fx.ws);
+    let h0 = full_state(&fx.ws);
     assert_eq!(read_via_command(&mut s, "pages/r.md"), json!("readable"));
     assert!(s.run("workspace.info", &json!({})).is_ok());
     let mut ro = bare_session();
     ro.set_lock_wait(Duration::ZERO);
     let opened = ro.run("workspace.open", &json!({ "path": fx.project.to_str().unwrap(), "readOnly": true })).unwrap();
     assert_eq!(opened["readOnly"], json!(true));
-    assert!(opened["staleLock"].is_null());
-    assert_eq!(tree_hash(&fx.ws), h0, "reading wrote nothing and took no lock");
+    assert_eq!(opened["staleLock"], json!(false));
+    assert_eq!(full_state(&fx.ws), h0, "reading wrote nothing and took no lock");
     drop(guard);
 }
 
@@ -297,7 +304,7 @@ fn reads_and_read_only_opens_work_while_another_writer_holds_the_lock() {
 fn the_read_only_and_root_gates_come_before_the_lock() {
     let fx = move_fixture();
     let guard = hold(&fx.project);
-    let h0 = tree_hash(&fx.ws);
+    let h0 = full_state(&fx.ws);
 
     let mut ro = bare_session();
     ro.set_lock_wait(Duration::ZERO);
@@ -314,41 +321,55 @@ fn the_read_only_and_root_gates_come_before_the_lock() {
     let e = outside.run("test.writeFiles", &writes(&[("pages/a.md", "x")])).unwrap_err();
     assert_eq!(code(&e), "outside_roots", "{e:?}");
 
-    assert_eq!(tree_hash(&fx.ws), h0, "neither session created or changed a lock file");
+    assert_eq!(full_state(&fx.ws), h0, "neither session created or changed a lock file");
     drop(guard);
 }
 
-// ADR 0007 #7, #11: the open takes the lock before it recovers.
+/// `recovery` is absent (R1: `null`, R2: the key is left out).
+fn no_recovery(opened: &Value) -> bool {
+    opened.get("recovery").is_none_or(Value::is_null)
+}
+
+// ADR 0008 #3 (spec gate-1.5): the open tries the lock once and never recovers without it; the
+// next mutating command recovers under the lock.
 #[test]
-fn a_read_write_open_waits_for_the_lock_before_recovering() {
+fn a_read_write_open_never_recovers_while_another_process_holds_the_lock() {
     let r = reference();
     let fx = crashed(&r, r.h + 1);
-    assert!(!journal_files(&fx.ws).is_empty(), "a journal head is planted");
+    assert!(!journal_files(&fx.ws).is_empty(), "a journal is planted");
     let other = move_fixture();
     let (mut s, _) = reopen(&other);
     s.set_lock_wait(Duration::ZERO);
-    let info = s.run("workspace.info", &json!({})).unwrap();
 
     let guard = hold(&fx.project);
-    let h0 = tree_hash(&fx.ws);
-    let e = s.run("workspace.open", &path_param(&fx.project)).unwrap_err();
-    assert_locked(&e);
-    assert_eq!(tree_hash(&fx.ws), h0, "nothing was recovered or swept: the head is still there");
+    let h0 = full_state(&fx.ws);
+    let local0 = local_files(&fx.ws);
+    let content0 = content(&fx.ws);
+    let opened = s.run("workspace.open", &path_param(&fx.project)).unwrap();
+    assert_eq!(opened["readOnly"], json!(false), "the open succeeds read-write");
+    assert!(no_recovery(&opened), "nothing was recovered without the lock: {opened}");
+    assert_eq!(opened["staleLock"], json!(false));
+    assert_eq!(full_state(&fx.ws), h0, "nothing was recovered or swept: the journal is still there");
+    assert_eq!(local_files(&fx.ws), local0);
+    assert_eq!(content(&fx.ws), content0);
     assert!(!journal_files(&fx.ws).is_empty());
-    assert_eq!(s.run("workspace.info", &json!({})).unwrap(), info, "the previous workspace stays open");
-    s.set_lock_wait(LONG);
-    s.run("test.writeFiles", &writes(&[("pages/still-open.md", "x")])).unwrap();
-    assert!(other.ws.join("pages/still-open.md").exists());
+    assert_eq!(s.run("workspace.info", &json!({})).unwrap()["path"], opened["path"], "the previous workspace is replaced");
+
+    // While the other holder is there, a write is refused (and writes nothing).
+    let e = s.run("test.writeFiles", &writes(&[("pages/blocked.md", "x")])).unwrap_err();
+    assert_locked(&e);
+    assert_eq!(full_state(&fx.ws), h0);
 
     drop(guard);
     s.set_lock_wait(LONG);
-    let opened = s.run("workspace.open", &path_param(&fx.project)).unwrap();
-    assert_eq!(opened["recovery"]["state"], json!("rolled_back"));
-    assert_eq!(content(&fx.ws), r.before);
-    assert!(opened["staleLock"].is_null(), "the lock was released, not abandoned");
+    write_ok(&mut s, &[("pages/z.md", "z")]);
+    let mut expect = r.before.clone();
+    expect.insert("pages/z.md".to_string(), b"z".to_vec());
+    assert_eq!(content(&fx.ws), expect, "the next mutating command recovers first (back to before), then writes");
+    assert!(journal_files(&fx.ws).is_empty());
 }
 
-// ADR 0007 #7: the open sweeps crash leftovers only under the lock.
+// ADR 0008 #3: an open that does not hold the lock sweeps nothing; the next open that does, sweeps.
 #[test]
 fn a_read_write_open_sweeps_leftovers_only_once_it_holds_the_lock() {
     let fx = move_fixture();
@@ -359,9 +380,9 @@ fn a_read_write_open_sweeps_leftovers_only_once_it_holds_the_lock() {
     s.set_lock_wait(Duration::ZERO);
 
     let guard = hold(&fx.project);
-    let e = s.run("workspace.open", &path_param(&fx.project)).unwrap_err();
-    assert_locked(&e);
-    assert!(leftover.exists(), "a refused open sweeps nothing: another holder may be writing it");
+    let opened = s.run("workspace.open", &path_param(&fx.project)).unwrap();
+    assert_eq!(opened["readOnly"], json!(false), "a busy lock does not refuse the open");
+    assert!(leftover.exists(), "an open without the lock sweeps nothing: another holder may be writing it");
 
     drop(guard);
     s.set_lock_wait(LONG);
@@ -394,14 +415,15 @@ fn at_l0_11_b_a_lock_left_by_a_killed_process_is_detected_and_cleared_on_open() 
     child.0.kill().unwrap();
     child.0.wait().unwrap();
     assert!(record_left(&fx.ws), "a killed holder leaves a trace");
+    // The result of the open only says that a stale lock was cleared; who left it is on disk.
+    let left = Holder::parse(&std::fs::read(fx.ws.join(".local/lock.json")).unwrap());
+    assert_eq!(left.pid, Some(child.id()));
+    assert!(left.process.is_some(), "the record names the process kind");
 
     let mut s = bare_session();
     s.set_lock_wait(LONG);
     let opened = s.run("workspace.open", &path_param(&fx.project)).unwrap();
-    let stale = &opened["staleLock"];
-    assert!(!stale.is_null(), "the dead holder is reported");
-    assert_eq!(stale["pid"], json!(child.id()));
-    assert_eq!(stale["command"], json!("test.hold"));
+    assert_eq!(opened["staleLock"], json!(true), "the dead holder is reported");
     assert!(!record_left(&fx.ws), "the stale lock is cleared");
 
     write_ok(&mut s, &[("pages/after.md", "after")]);
@@ -411,12 +433,12 @@ fn at_l0_11_b_a_lock_left_by_a_killed_process_is_detected_and_cleared_on_open() 
 
 /// Plants what a killed holder leaves: an empty lock file and a record.
 fn plant_stale(ws: &Path, record: &str) {
-    std::fs::create_dir_all(ws.join(".cache")).unwrap();
-    std::fs::write(ws.join(".cache/lock"), "").unwrap();
-    std::fs::write(ws.join(".cache/lock.json"), record).unwrap();
+    std::fs::create_dir_all(ws.join(".local")).unwrap();
+    std::fs::write(ws.join(".local/lock"), "").unwrap();
+    std::fs::write(ws.join(".local/lock.json"), record).unwrap();
 }
 
-const DEAD: &str = "{\"pid\": 4242, \"command\": \"page.move\", \"started\": 1700000000000}\n";
+const DEAD: &str = "{\"process\": \"cli\", \"pid\": 4242, \"host\": null, \"since\": \"2026-11-27T10:00:00Z\"}\n";
 
 #[test]
 fn a_stale_lock_with_a_journal_is_rolled_back_under_the_lock() {
@@ -429,8 +451,7 @@ fn a_stale_lock_with_a_journal_is_rolled_back_under_the_lock() {
     let mut s = bare_session();
     s.set_lock_wait(LONG);
     let opened = s.run("workspace.open", &path_param(&fx.project)).unwrap();
-    assert_eq!(opened["staleLock"]["pid"], json!(4242));
-    assert_eq!(opened["staleLock"]["command"], json!("page.move"));
+    assert_eq!(opened["staleLock"], json!(true));
     assert_eq!(opened["recovery"]["state"], json!("rolled_back"));
     assert_eq!(content(&fx.ws), r.before);
     assert!(!record_left(&fx.ws));
@@ -440,11 +461,13 @@ fn a_stale_lock_with_a_journal_is_rolled_back_under_the_lock() {
 #[test]
 fn a_stale_record_naming_a_live_pid_is_still_stale() {
     let fx = move_fixture();
-    plant_stale(&fx.ws, &format!("{{\"pid\": {}, \"command\": \"x\", \"started\": null}}\n", std::process::id()));
+    let planted = format!("{{\"process\": \"app\", \"pid\": {}, \"host\": null, \"since\": null}}\n", std::process::id());
+    plant_stale(&fx.ws, &planted);
+    assert_eq!(Holder::parse(planted.as_bytes()).pid, Some(std::process::id()), "the planted record names this live process");
     let mut s = bare_session();
     s.set_lock_wait(Duration::ZERO);
     let opened = s.run("workspace.open", &path_param(&fx.project)).unwrap();
-    assert_eq!(opened["staleLock"]["pid"], json!(std::process::id()), "liveness is the OS lock, never the pid");
+    assert_eq!(opened["staleLock"], json!(true), "liveness is the OS lock, never the pid");
 }
 
 #[test]
@@ -485,19 +508,20 @@ fn a_mutating_command_clears_a_stale_lock_and_recovers_first() {
 #[test]
 fn a_released_lock_leaves_no_record_and_a_clean_open_writes_nothing() {
     let fx = move_fixture();
-    let cache_before = fx.ws.join(".cache").exists();
+    assert!(!fx.ws.join(".cache").exists(), "`.cache/` is not ours to create");
     let before = tree(&fx.ws);
 
     let (mut s, opened) = reopen(&fx);
-    assert!(opened["staleLock"].is_null(), "a clean open has nothing stale");
+    assert_eq!(opened["staleLock"], json!(false), "a clean open has nothing stale");
     s.run("workspace.close", &json!({})).unwrap();
     assert_eq!(tree(&fx.ws), before, "open and close change nothing, mtimes included");
 
     let mut s = session_waiting(&fx, LONG);
     let check = |label: &str| {
         assert!(!record_left(&fx.ws), "{label}: the record is left");
-        assert!(lock_file_is_empty(&fx.ws), "{label}: `.cache/lock` is not a regular empty file");
-        assert_eq!(fx.ws.join(".cache").exists(), cache_before, "{label}: `.cache/` appeared or vanished");
+        assert!(lock_file_is_empty(&fx.ws), "{label}: `.local/lock` is not a regular empty file");
+        assert!(fx.ws.join(".local").is_dir(), "{label}: `.local/` vanished");
+        assert!(!fx.ws.join(".cache").exists(), "{label}: `.cache/` was created");
     };
     write_ok(&mut s, &[("pages/one.md", "1")]);
     check("success");
@@ -514,18 +538,20 @@ fn a_released_lock_leaves_no_record_and_a_clean_open_writes_nothing() {
     drop(hold(&fx.project));
     s.run("workspace.close", &json!({})).unwrap();
     let opened = s.run("workspace.open", &path_param(&fx.project)).unwrap();
-    assert!(opened["staleLock"].is_null());
+    assert_eq!(opened["staleLock"], json!(false));
     check("reopen");
 }
 
 #[test]
-fn what_else_lives_in_cache_survives_a_command_and_an_open() {
+fn what_else_lives_in_cache_and_local_survives_a_command_and_an_open() {
     let fx = move_fixture();
     fx.dir.put("proj/notecraft/.cache/other", "mine");
+    fx.dir.put("proj/notecraft/.local/other", "also mine");
     let mut s = session_waiting(&fx, LONG);
     write_ok(&mut s, &[("pages/one.md", "1")]);
     s.run("workspace.open", &path_param(&fx.project)).unwrap();
     assert_eq!(std::fs::read(fx.ws.join(".cache/other")).unwrap(), b"mine");
+    assert_eq!(std::fs::read(fx.ws.join(".local/other")).unwrap(), b"also mine");
     assert!(!record_left(&fx.ws));
 }
 
@@ -541,16 +567,16 @@ struct Case {
     stale: bool,
 }
 
-/// Makes `.cache/` and removes the persistent lock file that `workspace.create` writes (ADR 0007),
-/// so a case can plant something else at `.cache/lock`.
-fn cache(ws: &Path) {
-    std::fs::create_dir_all(ws.join(".cache")).unwrap();
-    let _ = std::fs::remove_file(ws.join(".cache/lock"));
+/// Makes `.local/` and removes the persistent lock file that `workspace.create` writes (ADR 0007),
+/// so a case can plant something else at `.local/lock`.
+fn local(ws: &Path) {
+    std::fs::create_dir_all(ws.join(".local")).unwrap();
+    let _ = std::fs::remove_file(ws.join(".local/lock"));
 }
 
-/// Removes `.cache/` so that a file or a link can take its place.
-fn no_cache(ws: &Path) {
-    let _ = std::fs::remove_dir_all(ws.join(".cache"));
+/// Removes `.local/` so that a file or a link can take its place.
+fn no_local(ws: &Path) {
+    let _ = std::fs::remove_dir_all(ws.join(".local"));
 }
 
 fn cases() -> Vec<Case> {
@@ -558,18 +584,18 @@ fn cases() -> Vec<Case> {
         Case {
             label: "lock is a folder",
             plant: |ws| {
-                cache(ws);
-                std::fs::create_dir(ws.join(".cache/lock")).unwrap();
+                local(ws);
+                std::fs::create_dir(ws.join(".local/lock")).unwrap();
                 true
             },
             io: true,
             stale: false,
         },
         Case {
-            label: "cache is a file",
+            label: "local is a file",
             plant: |ws| {
-                no_cache(ws);
-                std::fs::write(ws.join(".cache"), "not a folder").unwrap();
+                no_local(ws);
+                std::fs::write(ws.join(".local"), "not a folder").unwrap();
                 true
             },
             io: true,
@@ -578,8 +604,8 @@ fn cases() -> Vec<Case> {
         Case {
             label: "record is a folder",
             plant: |ws| {
-                cache(ws);
-                std::fs::create_dir(ws.join(".cache/lock.json")).unwrap();
+                local(ws);
+                std::fs::create_dir(ws.join(".local/lock.json")).unwrap();
                 true
             },
             io: false,
@@ -588,8 +614,8 @@ fn cases() -> Vec<Case> {
         Case {
             label: "record is garbage",
             plant: |ws| {
-                cache(ws);
-                std::fs::write(ws.join(".cache/lock.json"), [0xFF, 0x00, 0xFE, b'{']).unwrap();
+                local(ws);
+                std::fs::write(ws.join(".local/lock.json"), [0xFF, 0x00, 0xFE, b'{']).unwrap();
                 true
             },
             io: false,
@@ -598,8 +624,8 @@ fn cases() -> Vec<Case> {
         Case {
             label: "record is huge",
             plant: |ws| {
-                cache(ws);
-                std::fs::write(ws.join(".cache/lock.json"), format!("{{\"command\": \"{}\"}}", "z".repeat(1 << 20))).unwrap();
+                local(ws);
+                std::fs::write(ws.join(".local/lock.json"), format!("{{\"command\": \"{}\"}}", "z".repeat(1 << 20))).unwrap();
                 true
             },
             io: false,
@@ -608,8 +634,8 @@ fn cases() -> Vec<Case> {
         Case {
             label: "record is foreign",
             plant: |ws| {
-                cache(ws);
-                std::fs::write(ws.join(".cache/lock.json"), "{\"owner\": \"someone\", \"pid\": \"x\"}").unwrap();
+                local(ws);
+                std::fs::write(ws.join(".local/lock.json"), "{\"owner\": \"someone\", \"pid\": \"x\"}").unwrap();
                 true
             },
             io: false,
@@ -618,8 +644,8 @@ fn cases() -> Vec<Case> {
         Case {
             label: "lock is a sparse file",
             plant: |ws| {
-                cache(ws);
-                let f = std::fs::File::create(ws.join(".cache/lock")).unwrap();
+                local(ws);
+                let f = std::fs::File::create(ws.join(".local/lock")).unwrap();
                 f.set_len(100 << 20).unwrap();
                 true
             },
@@ -649,8 +675,8 @@ fn unix_cases() -> Vec<Case> {
         Case {
             label: "lock is a link to a page",
             plant: |ws| {
-                cache(ws);
-                std::os::unix::fs::symlink(ws.join("pages/a.md"), ws.join(".cache/lock")).unwrap();
+                local(ws);
+                std::os::unix::fs::symlink(ws.join("pages/a.md"), ws.join(".local/lock")).unwrap();
                 true
             },
             io: true,
@@ -659,10 +685,10 @@ fn unix_cases() -> Vec<Case> {
         Case {
             label: "lock is a link out of the workspace",
             plant: |ws| {
-                cache(ws);
+                local(ws);
                 let target = elsewhere(ws, "elsewhere-file");
                 std::fs::write(&target, "outside").unwrap();
-                std::os::unix::fs::symlink(target, ws.join(".cache/lock")).unwrap();
+                std::os::unix::fs::symlink(target, ws.join(".local/lock")).unwrap();
                 true
             },
             io: true,
@@ -671,8 +697,8 @@ fn unix_cases() -> Vec<Case> {
         Case {
             label: "lock is a dangling link",
             plant: |ws| {
-                cache(ws);
-                std::os::unix::fs::symlink(elsewhere(ws, "nowhere"), ws.join(".cache/lock")).unwrap();
+                local(ws);
+                std::os::unix::fs::symlink(elsewhere(ws, "nowhere"), ws.join(".local/lock")).unwrap();
                 true
             },
             io: true,
@@ -681,8 +707,8 @@ fn unix_cases() -> Vec<Case> {
         Case {
             label: "lock is a fifo",
             plant: |ws| {
-                cache(ws);
-                mkfifo(&ws.join(".cache/lock"))
+                local(ws);
+                mkfifo(&ws.join(".local/lock"))
             },
             io: true,
             stale: false,
@@ -690,8 +716,8 @@ fn unix_cases() -> Vec<Case> {
         Case {
             label: "record is a link to a page",
             plant: |ws| {
-                cache(ws);
-                std::os::unix::fs::symlink(ws.join("pages/a.md"), ws.join(".cache/lock.json")).unwrap();
+                local(ws);
+                std::os::unix::fs::symlink(ws.join("pages/a.md"), ws.join(".local/lock.json")).unwrap();
                 true
             },
             io: false,
@@ -700,31 +726,31 @@ fn unix_cases() -> Vec<Case> {
         Case {
             label: "record is a fifo",
             plant: |ws| {
-                cache(ws);
-                mkfifo(&ws.join(".cache/lock.json"))
+                local(ws);
+                mkfifo(&ws.join(".local/lock.json"))
             },
             io: false,
             stale: false,
         },
         Case {
-            label: "cache is a link to pages holding files named like ours",
+            label: "local is a link to pages holding files named like ours",
             plant: |ws| {
-                no_cache(ws);
+                no_local(ws);
                 std::fs::write(ws.join("pages/lock"), "user lock").unwrap();
                 std::fs::write(ws.join("pages/lock.json"), "user record").unwrap();
-                std::os::unix::fs::symlink(ws.join("pages"), ws.join(".cache")).unwrap();
+                std::os::unix::fs::symlink(ws.join("pages"), ws.join(".local")).unwrap();
                 true
             },
             io: true,
             stale: false,
         },
         Case {
-            label: "cache is a link out of the workspace",
+            label: "local is a link out of the workspace",
             plant: |ws| {
                 let target = elsewhere(ws, "elsewhere-dir");
                 std::fs::create_dir_all(&target).unwrap();
-                no_cache(ws);
-                std::os::unix::fs::symlink(target, ws.join(".cache")).unwrap();
+                no_local(ws);
+                std::os::unix::fs::symlink(target, ws.join(".local")).unwrap();
                 true
             },
             io: true,
@@ -734,8 +760,8 @@ fn unix_cases() -> Vec<Case> {
             label: "lock file without write permission",
             plant: |ws| {
                 use std::os::unix::fs::PermissionsExt;
-                cache(ws);
-                let f = ws.join(".cache/lock");
+                local(ws);
+                let f = ws.join(".local/lock");
                 std::fs::write(&f, "").unwrap();
                 std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o444)).unwrap();
                 // Running as root: permissions do not apply.
@@ -747,7 +773,9 @@ fn unix_cases() -> Vec<Case> {
     ]
 }
 
-fn check_result(label: &str, what: &str, r: Result<Value, CmdError>, io: bool, ws: &Path, h0: &str) -> Option<Value> {
+type State = (String, BTreeMap<String, Vec<u8>>);
+
+fn check_result(label: &str, what: &str, r: Result<Value, CmdError>, io: bool, ws: &Path, h0: &State) -> Option<Value> {
     match r {
         Ok(v) => {
             assert!(!io, "{label}: the {what} should have failed with `io`");
@@ -759,7 +787,7 @@ fn check_result(label: &str, what: &str, r: Result<Value, CmdError>, io: bool, w
             assert_eq!(detail(&e, "reason"), Some("lock"), "{label} {what}");
             assert!(e.details.contains_key("path"), "{label} {what}");
             assert!(e.message.len() < 500, "{label} {what}: message too long");
-            assert_eq!(tree_hash(ws), h0, "{label} {what}: an `io` failure changes nothing");
+            assert_eq!(&full_state(ws), h0, "{label} {what}: an `io` failure changes nothing");
             None
         }
     }
@@ -780,17 +808,27 @@ fn hostile_lock_paths_give_io_or_success_and_never_touch_user_files() {
             }
             let user_files = content(&fx.ws);
 
-            // A fresh open sees the planted entry first.
-            let h0 = tree_hash(&fx.ws);
+            // A fresh open sees the planted entry first. Where no lock is possible it still
+            // succeeds, read-only with `noLock`, and writes nothing.
+            let h0 = full_state(&fx.ws);
             let mut fresh = bare_session();
             fresh.set_lock_wait(LONG);
-            let opened = check_result(label, "open", fresh.run("workspace.open", &path_param(&fx.project)), io, &fx.ws, &h0);
-            if let Some(opened) = opened {
-                assert_eq!(!opened["staleLock"].is_null(), stale, "{label}: staleLock {}", opened["staleLock"]);
+            let opened = fresh.run("workspace.open", &path_param(&fx.project)).unwrap_or_else(|e| panic!("{label}: the open failed: {e:?}"));
+            if io {
+                assert_eq!(opened["readOnly"], json!(true), "{label}");
+                assert_eq!(opened["readOnlyReason"], json!("noLock"), "{label}");
+                assert_eq!(full_state(&fx.ws), h0, "{label}: a read-only open writes nothing");
+                let refused = fresh.run("test.writeFiles", &writes(&[("pages/y.md", "y")])).unwrap_err();
+                assert_eq!(code(&refused), "read_only", "{label}");
+                assert_eq!(detail(&refused, "reason"), Some("noLock"), "{label}");
+                assert_eq!(full_state(&fx.ws), h0, "{label}: a refused command writes nothing");
+            } else {
+                assert_eq!(opened["staleLock"], json!(stale), "{label}: staleLock {}", opened["staleLock"]);
+                assert!(opened.get("readOnlyReason").is_none(), "{label}: a writable open names no reason");
             }
 
-            // So does a command in a session that was open before.
-            let h1 = tree_hash(&fx.ws);
+            // A command in a session that was open before still gives `io` where the lock is unusable.
+            let h1 = full_state(&fx.ws);
             let written = check_result(label, "write", s.run("test.writeFiles", &writes(&[("pages/x.md", "x")])), io, &fx.ws, &h1);
             assert_eq!(written.is_some(), !io, "{label}");
 
@@ -800,4 +838,141 @@ fn hostile_lock_paths_give_io_or_success_and_never_touch_user_files() {
             }
         });
     }
+}
+
+// ---- spec gate-1.5: new tests (R1) ----
+
+// file-format 9.1: a fresh clone has neither `.local/` nor `.cache/` (both are ignored).
+#[test]
+fn a_fresh_clone_gets_local_on_its_first_write_and_the_tree_hash_ignores_it() {
+    let fx = move_fixture();
+    let before = tree_hash(&fx.ws);
+    let before_content = content(&fx.ws);
+    let _ = std::fs::remove_dir_all(fx.ws.join(".local"));
+    let _ = std::fs::remove_dir_all(fx.ws.join(".cache"));
+
+    let (mut s, opened) = reopen(&fx);
+    assert_eq!(opened["readOnly"], json!(false));
+    write_ok(&mut s, &[("pages/new.md", "n")]);
+    assert!(lock_file_is_empty(&fx.ws), "`.local/lock` is an empty regular file");
+    assert!(!record_left(&fx.ws), "no record is left");
+    assert!(!fx.ws.join(".cache").exists(), "`.cache/` is not ours to create");
+
+    let mut expect = before_content;
+    expect.insert("pages/new.md".to_string(), b"n".to_vec());
+    assert_eq!(content(&fx.ws), expect, "the content is the old one plus the page, whatever `.local/` holds");
+    std::fs::remove_file(fx.ws.join("pages/new.md")).unwrap();
+    assert_eq!(tree_hash(&fx.ws), before, "the tree hash does not see `.local/`");
+}
+
+// AT-L0-11-c: more than the wait of 5 s.
+#[test]
+fn at_l0_11_c_a_holder_for_more_than_the_wait_gives_disabled_locked_with_its_holder() {
+    let fx = move_fixture();
+    // Opened before the child starts; the wait is the default one.
+    let (mut s, _) = reopen(&fx);
+    let (mut child, ready, go) = hold_job(&fx, "pages/child.md", "from the child");
+    wait_for(&mut child, &ready);
+
+    let state = full_state(&fx.ws);
+    let local = local_files(&fx.ws);
+    let started = Instant::now();
+    let e = s.run("test.writeFiles", &writes(&[("pages/parent.md", "from the parent")])).unwrap_err();
+    let waited = started.elapsed();
+    assert!(waited >= LOCK_WAIT, "the command waited for the holder first: {waited:?}");
+    assert!(waited < LONG, "and did not hang: {waited:?}");
+    assert_locked(&e);
+    assert_eq!(holder_pid(&e), Some(u64::from(child.id())), "the holder is the other process");
+    assert!(!fx.ws.join("pages/parent.md").exists(), "nothing was written");
+    assert_eq!(full_state(&fx.ws), state);
+    assert_eq!(local_files(&fx.ws), local);
+    assert!(!s.can_undo(), "a refused command leaves no history step");
+
+    std::fs::write(&go, "go").unwrap();
+    assert!(child.0.wait().unwrap().success());
+}
+
+// AT-L0-11-d: where no lock can be had, the workspace opens read-only and says why.
+#[test]
+fn at_l0_11_d_no_lock_opens_read_only_no_lock() {
+    fn assert_no_lock_workspace(fx: &Fixture, label: &str) {
+        let before = tree(&fx.ws);
+        let mut s = bare_session();
+        let opened = s.run("workspace.open", &path_param(&fx.project)).unwrap_or_else(|e| panic!("{label}: the open failed: {e:?}"));
+        assert_eq!(opened["readOnly"], json!(true), "{label}");
+        assert_eq!(opened["readOnlyReason"], json!("noLock"), "{label}");
+        assert!(s.read_only(), "{label}");
+        for (id, params) in
+            [("test.writeFiles", writes(&[("pages/a.md", "x"), ("pages/b.md", "y")])), ("edit.undo", json!({})), ("edit.redo", json!({}))]
+        {
+            let e = s.run(id, &params).unwrap_err();
+            assert_eq!(code(&e), "read_only", "{label} {id}");
+            assert_eq!(detail(&e, "reason"), Some("noLock"), "{label} {id}");
+            assert!(!e.message.contains('_'), "{label} {id}: the message is words, not a token: {}", e.message);
+        }
+        assert!(s.run("workspace.info", &json!({})).is_ok(), "{label}: reads work");
+        assert_eq!(tree(&fx.ws), before, "{label}: nothing was written");
+    }
+
+    // `.local` is a regular file: no lock can be taken there.
+    let fx = move_fixture();
+    std::fs::remove_dir_all(fx.ws.join(".local")).unwrap();
+    std::fs::write(fx.ws.join(".local"), "not a folder").unwrap();
+    assert_no_lock_workspace(&fx, ".local is a file");
+
+    // A workspace on a read-only folder with no `.local/` yet.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        struct Restore(PathBuf);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+            }
+        }
+        let fx = move_fixture();
+        std::fs::remove_dir_all(fx.ws.join(".local")).unwrap();
+        let _restore = Restore(fx.ws.clone());
+        std::fs::set_permissions(&fx.ws, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let probe = fx.ws.join("probe");
+        if std::fs::write(&probe, "x").is_ok() {
+            let _ = std::fs::remove_file(&probe);
+            return; // running as root: permissions do not apply
+        }
+        assert_no_lock_workspace(&fx, "read-only folder");
+    }
+}
+
+// ADR 0008 #3: the open tries the lock once.
+#[test]
+fn a_busy_lock_at_open_neither_waits_nor_recovers() {
+    let r = reference();
+    let fx = crashed(&r, r.h + 1);
+    let guard = hold(&fx.project);
+    let journal = local_files(&fx.ws);
+    let mut s = bare_session();
+    s.set_lock_wait(LONG);
+
+    let started = Instant::now();
+    let opened = s.run("workspace.open", &path_param(&fx.project)).unwrap();
+    assert!(started.elapsed() < LONG / 2, "the open did not wait for the lock: {:?}", started.elapsed());
+    assert_eq!(opened["readOnly"], json!(false));
+    assert!(opened.get("readOnlyReason").is_none());
+    assert_eq!(opened["staleLock"], json!(false));
+    assert!(no_recovery(&opened), "{opened}");
+    assert_eq!(local_files(&fx.ws), journal, "the journal was not touched");
+    drop(guard);
+}
+
+// AT-L0-11-b: the report is a boolean and it is made once.
+#[test]
+fn a_stale_lock_is_reported_once() {
+    let fx = move_fixture();
+    plant_stale(&fx.ws, DEAD);
+    let mut s = bare_session();
+    let first = s.run("workspace.open", &path_param(&fx.project)).unwrap();
+    assert_eq!(first["staleLock"], json!(true));
+    assert!(!record_left(&fx.ws), "the stale record is cleared");
+    let second = bare_session().run("workspace.open", &path_param(&fx.project)).unwrap();
+    assert_eq!(second["staleLock"], json!(false));
 }

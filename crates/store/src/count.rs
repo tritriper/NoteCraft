@@ -52,16 +52,19 @@ fn front_matter_trashed(bytes: &[u8], complete: bool) -> bool {
     false
 }
 
-/// `Some(trashed)` for a markdown file; `None` when it cannot be read.
-fn is_trashed(path: &Path) -> Option<bool> {
-    let file = fs::File::open(path).ok()?;
+/// Whether a markdown file is trashed. A file that cannot be opened or read counts as not
+/// trashed (ADR 0008 #15).
+fn is_trashed(path: &Path) -> bool {
+    let Ok(file) = fs::File::open(path) else { return false };
     let mut bytes = Vec::new();
-    file.take(FRONT_MATTER_MAX + 1).read_to_end(&mut bytes).ok()?;
+    if file.take(FRONT_MATTER_MAX + 1).read_to_end(&mut bytes).is_err() {
+        return false;
+    }
     let complete = u64::try_from(bytes.len()).is_ok_and(|n| n <= FRONT_MATTER_MAX);
     if !complete {
         bytes.truncate(usize::try_from(FRONT_MATTER_MAX).unwrap_or(0));
     }
-    Some(front_matter_trashed(&bytes, complete))
+    front_matter_trashed(&bytes, complete)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -109,7 +112,7 @@ pub(crate) fn count(workspace: &Path) -> Option<Counts> {
         }
         let database = kind == Kind::Normal && entries.iter().any(|e| e.is_file && e.name == "database.md");
         if database && let Some(manifest) = entries.iter().find(|e| e.is_file && e.name == "database.md") {
-            if is_trashed(&manifest.path)? {
+            if is_trashed(&manifest.path) {
                 continue;
             }
             counts.databases += 1;
@@ -121,7 +124,7 @@ pub(crate) fn count(workspace: &Path) -> Option<Counts> {
             if database && e.name == "database.md" {
                 continue;
             }
-            if is_trashed(&e.path)? {
+            if is_trashed(&e.path) {
                 hidden.push(stem);
             } else if kind == Kind::Rows {
                 counts.rows += 1;

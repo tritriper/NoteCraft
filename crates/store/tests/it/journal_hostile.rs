@@ -48,7 +48,19 @@ fn cases() -> Vec<(String, Vec<u8>)> {
     add("entries empty", doc(&t, "\"c\"", "[]"));
     add("100001 entries", doc(&t, "\"c\"", &format!("[{}]", vec!["0"; 100_001].join(","))));
     add("entry not an object", doc(&t, "\"c\"", "[1]"));
-    for p in ["\"../x\"", "\"/x\"", "\".cache/journal/head.json\"", "\".CACHE/x\"", "\"con.md\"", "\"\"", "5", "null", "\"a\\u0000b\""] {
+    for p in [
+        "\"../x\"",
+        "\"/x\"",
+        "\".cache/journal/head.json\"",
+        "\".CACHE/x\"",
+        "\".local/lock\"",
+        "\".LOCAL/journal/x.json\"",
+        "\"con.md\"",
+        "\"\"",
+        "5",
+        "null",
+        "\"a\\u0000b\"",
+    ] {
         add(&format!("path {p}"), doc(&t, "\"c\"", &format!("[{{\"path\": {p}, \"before\": null, \"after\": \"{}\"}}]", "b".repeat(64))));
     }
     let dup = format!("{{\"path\": \"x.md\", \"before\": null, \"after\": \"{}\"}}", "b".repeat(64));

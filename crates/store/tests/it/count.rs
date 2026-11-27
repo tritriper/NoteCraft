@@ -108,3 +108,36 @@ fn a_trashed_database_hides_its_rows_and_a_rows_folder_without_database_is_pages
     ws.write(&rel("pages/d/database.md"), TRASHED.as_bytes()).unwrap();
     assert_eq!(counts(&ws), (1, 0, 0));
 }
+
+// Counts, spec note: an unreadable file is "not trashed" (it is counted), never a missing count.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_page_counts_as_not_trashed() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = TempDir::new();
+    let ws = fresh(&dir);
+    put_all(&ws, &[("pages/ok.md", FM), ("pages/secret.md", TRASHED)]);
+    let secret = ws.dir().join("pages/secret.md");
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let readable = std::fs::File::open(&secret).is_ok();
+    let counted = ws.count_items();
+    std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
+    if readable {
+        return; // running as root: permissions do not apply
+    }
+    let c = counted.unwrap();
+    assert_eq!((c.pages, c.databases, c.rows), (2, 0, 0), "the unreadable page is counted, not dropped with the whole count");
+}
+
+// Counts, spec note: only the first 64 KiB are read; a front matter that closes beyond it is not trashed.
+#[test]
+fn front_matter_that_does_not_close_within_the_limit_is_not_trashed() {
+    let filler = |n: usize| "x: y\n".repeat(n);
+    let dir = TempDir::new();
+    let ws = fresh(&dir);
+    let beyond = format!("---\ntrashed: 2026-01-01\n{}---\nbody\n", filler(20_000)); // closes after ~120 KiB
+    let within = format!("---\ntrashed: 2026-01-01\n{}---\nbody\n", filler(100));
+    assert!(beyond.len() > 64 * 1024 + 1024);
+    put_all(&ws, &[("pages/far.md", &beyond), ("pages/near.md", &within)]);
+    assert_eq!(counts(&ws), (1, 0, 0), "the front matter that closes within the limit trashes its page, the other is counted");
+}

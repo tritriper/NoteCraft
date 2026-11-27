@@ -52,13 +52,13 @@ pub(crate) fn remove_staging(project: &Path) -> u64 {
     removed
 }
 
-/// Removes every regular file of the journal folder when there is no head. `.cache` and the
+/// Removes every regular file of the journal folder when there is no head. `.local` and the
 /// journal folder must be real folders.
 fn remove_orphans(dir: &Path) -> u64 {
     let real_dir = |p: &Path| fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_dir());
-    let cache = dir.join(".cache");
+    let local = dir.join(".local");
     let journal = dir.join(JOURNAL_DIR);
-    if !real_dir(&cache) || !real_dir(&journal) || fs::symlink_metadata(dir.join(JOURNAL_HEAD)).is_ok() {
+    if !real_dir(&local) || !real_dir(&journal) || fs::symlink_metadata(dir.join(JOURNAL_HEAD)).is_ok() {
         return 0;
     }
     let Ok(entries) = fs::read_dir(&journal) else { return 0 };

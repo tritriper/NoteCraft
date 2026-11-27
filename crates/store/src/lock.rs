@@ -1,5 +1,5 @@
-//! The workspace write lock (ADR 0007): an OS advisory lock on `.cache/lock` (std `File::try_lock`)
-//! and an advisory holder record in `.cache/lock.json`.
+//! The workspace write lock (ADR 0007): an OS advisory lock on `.local/lock` (std `File::try_lock`)
+//! and an advisory holder record in `.local/lock.json`.
 
 use std::fmt;
 use std::fs;
@@ -14,21 +14,26 @@ use crate::error::clip;
 use crate::workspace::Workspace;
 
 /// The locked file, inside the workspace. It is only locked, never read or written.
-pub const LOCK_FILE: &str = ".cache/lock";
+pub const LOCK_FILE: &str = ".local/lock";
 /// The holder record. Advisory: used in messages and to tell that a holder did not release.
-pub const LOCK_RECORD: &str = ".cache/lock.json";
+pub const LOCK_RECORD: &str = ".local/lock.json";
 /// A record larger than this is not read (it is treated as unreadable).
 pub const LOCK_RECORD_MAX_BYTES: u64 = 4096;
 
-const COMMAND_MAX_BYTES: usize = 200;
+const HOST_MAX_BYTES: usize = 255;
+const SINCE_MAX_BYTES: usize = 64;
 const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 
-/// Who holds (or held) the write lock. Advisory only (ADR 0007 #5).
+/// Who holds (or held) the write lock. Advisory only (ADR 0007 #5, ADR 0008 #9).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Holder {
+    /// `app`, `cli` or `mcp`.
+    pub process: Option<String>,
     pub pid: Option<u32>,
-    pub command: Option<String>,
-    pub started: Option<u64>,
+    /// Always `None` when written in L0 (ADR 0008 #14); read when present.
+    pub host: Option<String>,
+    /// RFC 3339 time the holder took the lock.
+    pub since: Option<String>,
 }
 
 fn clip_bytes(s: &str, max: usize) -> &str {
@@ -44,22 +49,29 @@ fn clip_bytes(s: &str, max: usize) -> &str {
 
 impl Holder {
     /// Tolerant and total: garbage gives `Holder::default()`; a key of the wrong type is `None`;
-    /// `command` is clipped to 200 bytes on a character boundary. Unknown keys are ignored.
+    /// `process` is kept only as `app`, `cli` or `mcp`, `host` is clipped to 255 bytes on a
+    /// character boundary, `since` is kept only when it is RFC 3339. Unknown keys are ignored.
     pub fn parse(bytes: &[u8]) -> Holder {
         let bytes = bytes.strip_prefix(&BOM[..]).unwrap_or(bytes);
         let Ok(text) = std::str::from_utf8(bytes) else { return Holder::default() };
         let Ok(Value::Object(map)) = serde_json::from_str::<Value>(text) else { return Holder::default() };
         Holder {
+            process: map.get("process").and_then(Value::as_str).filter(|p| matches!(*p, "app" | "cli" | "mcp")).map(str::to_string),
             pid: map.get("pid").and_then(Value::as_u64).and_then(|p| u32::try_from(p).ok()),
-            command: map.get("command").and_then(Value::as_str).map(|c| clip_bytes(c, COMMAND_MAX_BYTES).to_string()),
-            started: map.get("started").and_then(Value::as_u64),
+            host: map.get("host").and_then(Value::as_str).map(|h| clip_bytes(h, HOST_MAX_BYTES).to_string()),
+            since: map
+                .get("since")
+                .and_then(Value::as_str)
+                .filter(|s| s.len() <= SINCE_MAX_BYTES && chrono::DateTime::parse_from_rfc3339(s).is_ok())
+                .map(str::to_string),
         }
     }
 
-    /// `{"pid": …, "command": …, "started": …}` + "\n", keys in that order, `null` for `None`.
+    /// `{"process": …, "pid": …, "host": …, "since": …}` + "\n", keys in that order, `null` for
+    /// `None`.
     pub fn to_bytes(&self) -> Vec<u8> {
-        let command = self.command.as_deref().map(|c| clip_bytes(c, COMMAND_MAX_BYTES));
-        let mut out = json!({ "pid": self.pid, "command": command, "started": self.started }).to_string().into_bytes();
+        let host = self.host.as_deref().map(|h| clip_bytes(h, HOST_MAX_BYTES));
+        let mut out = json!({ "process": self.process, "pid": self.pid, "host": host, "since": self.since }).to_string().into_bytes();
         out.push(b'\n');
         out
     }
@@ -74,7 +86,7 @@ pub enum LockError {
     Unsupported,
     /// The handle is read-only.
     ReadOnly,
-    /// `.cache/` or a lock path is unusable. Nothing was changed.
+    /// `.local/` or a lock path is unusable. Nothing was changed.
     Io { path: String, message: String },
 }
 
@@ -122,11 +134,11 @@ impl Drop for WriteLock {
     }
 }
 
-/// The record, read without the lock; `None` unless `.cache` is a real folder and the record a
+/// The record, read without the lock; `None` unless `.local` is a real folder and the record a
 /// regular file.
 pub(crate) fn read_record(ws: &Workspace) -> Option<Holder> {
-    let cache = ws.dir().join(".cache");
-    if !fs::symlink_metadata(&cache).ok()?.file_type().is_dir() {
+    let local = ws.dir().join(".local");
+    if !fs::symlink_metadata(&local).ok()?.file_type().is_dir() {
         return None;
     }
     read_regular(&ws.dir().join(LOCK_RECORD))
@@ -216,22 +228,22 @@ mod native {
         false
     }
 
-    /// Makes sure `.cache` is a real folder. It is never removed, so a first writer cannot race a
+    /// Makes sure `.local` is a real folder. It is never removed, so a first writer cannot race a
     /// removal.
-    fn ensure_cache(ws: &Workspace) -> Result<(), LockError> {
-        let cache = ws.dir().join(".cache");
-        // `ws.dir()` is canonical and `.cache` is its direct child: a link there is refused below,
-        // by `symlink_metadata`, and nothing is resolved twice, so a `.cache` that another writer
+    fn ensure_local(ws: &Workspace) -> Result<(), LockError> {
+        let local = ws.dir().join(".local");
+        // `ws.dir()` is canonical and `.local` is its direct child: a link there is refused below,
+        // by `symlink_metadata`, and nothing is resolved twice, so a `.local` that another writer
         // creates meanwhile is never mistaken for a dangling link.
-        match fs::symlink_metadata(&cache) {
+        match fs::symlink_metadata(&local) {
             Ok(m) if m.file_type().is_dir() => Ok(()),
-            Ok(_) => Err(refuse(&cache, "not a folder")),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => match fs::create_dir(&cache) {
+            Ok(_) => Err(refuse(&local, "not a folder")),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => match fs::create_dir(&local) {
                 Ok(()) => Ok(()),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
-                Err(e) => Err(step_err(&cache, "open", &e)),
+                Err(e) => Err(step_err(&local, "open", &e)),
             },
-            Err(e) => Err(step_err(&cache, "open", &e)),
+            Err(e) => Err(step_err(&local, "open", &e)),
         }
     }
 
@@ -332,7 +344,7 @@ mod native {
             if attempts > MAX_IDENTITY_RETRIES {
                 return Err(refuse(&lock_path, "identity: the lock file keeps changing"));
             }
-            ensure_cache(ws)?;
+            ensure_local(ws)?;
             let file = match open_lock_file(&lock_path)? {
                 Opened::File(f) => f,
                 Opened::Retry => {
@@ -396,5 +408,28 @@ mod native {
             }
             Err(_) => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn host_is_clipped_on_a_character_boundary() {
+        // 'é' is two bytes: 255 falls inside the 128th one, so 127 whole characters (254 bytes) stay.
+        let long = format!(r#"{{"host": "{}"}}"#, "é".repeat(200));
+        let host = Holder::parse(long.as_bytes()).host.unwrap_or_default();
+        assert_eq!(host.len(), 254);
+        let exact = format!(r#"{{"host": "{}"}}"#, "a".repeat(255));
+        assert_eq!(Holder::parse(exact.as_bytes()).host.map(|h| h.len()), Some(255));
+    }
+
+    #[test]
+    fn since_is_kept_only_as_rfc_3339_and_process_only_as_a_known_one() {
+        let h = Holder::parse(br#"{"process": "mcp", "since": "2026-11-27T10:00:00+01:00"}"#);
+        assert_eq!((h.process.as_deref(), h.since.as_deref()), (Some("mcp"), Some("2026-11-27T10:00:00+01:00")));
+        let h = Holder::parse(br#"{"process": "other", "since": "2026-11-27"}"#);
+        assert_eq!((h.process, h.since), (None, None));
     }
 }

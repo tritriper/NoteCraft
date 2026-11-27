@@ -78,27 +78,32 @@ network: `cargo xtask layers` and `cargo xtask lints` check it.
 ### Crash safety ([ADR 0006](adr/0006-multi-file-commit-journal.md), US-L0-10)
 
 Each file is replaced atomically, so one file is always old or new. A command that changes two or
-more files also keeps an undo journal in the workspace's `.cache/journal/`, which `.gitignore`
-already excludes. Before the first file is touched, the journal holds the previous bytes of every
+more files also keeps an undo journal in the workspace's `.local/journal/`, which `.gitignore`
+already excludes (the journal moves to a forward-replaying intent journal in the next rework step,
+[ADR 0008](adr/0008-transactions-and-lock-follow-gate-1-5.md)). Before the first file is touched, the journal holds the previous bytes of every
 file the command will change. The command reports success only once the journal is removed,
 which is the commit point. If NoteCraft stops in between, the next `workspace.open` puts every
 file back as it was, so the workspace is entirely before or entirely after the command. Recovery
 never overwrites a file that changed outside NoteCraft since the crash. When it cannot finish
 safely, the workspace opens read-only and says why. Opening also removes the temporary files and
-staging folders that a crash leaves behind. Commands cannot write inside `.cache/`.
+staging folders that a crash leaves behind. Commands cannot write inside `.cache/` or `.local/`.
 
 ## One writer at a time
 
-Every mutating command, undo and redo take a lock on `notecraft/.cache/lock` for the length of one
+Every mutating command, undo and redo take a lock on `notecraft/.local/lock` for the length of one
 command ([ADR 0007](adr/0007-workspace-write-lock.md), US-L0-11). It is an operating-system lock
 taken through the standard library, so it is dropped when its process dies, however it dies. The app,
 the CLI and the MCP server therefore serialise their writes, including the read inside a
 read-change-write. A second writer waits a bounded time (`Session::set_lock_wait`, 5 s by default),
-then the command fails with `disabled` and reason `locked`, naming the holder from the advisory record
-`.cache/lock.json`. A record found when the lock is taken means the last holder died: `workspace.open`
-reports it as `staleLock`, and recovery and the sweep run only while the lock is held. Reads never lock.
-A released lock removes the record and keeps the empty lock file (`create` writes it, nothing deletes it). Where the file system has no locks, writes are refused and a
-read-only open still works.
+then the command fails with `disabled` and reason `locked`, naming the holder (`process`, `pid`, `host`,
+`since`) from the advisory record `.local/lock.json`. A record found when the lock is taken means the last
+holder died: `workspace.open` reports it as `staleLock: true`, and recovery and the sweep run only while the
+lock is held. `workspace.open` tries the lock once and never waits: when another process holds it, the
+workspace opens read-write without recovering, and the next command recovers under the lock. Reads never
+lock. A released lock removes the record and keeps the empty lock file (`create` writes it; the first
+writer makes `.local/` and the file in a fresh clone; nothing deletes them). Where the file system has no
+locks, or `.local/lock` cannot be made, the workspace opens read-only with reason `noLock` and a write gives
+`read_only`.
 
 ## Testing and gates
 
