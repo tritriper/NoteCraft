@@ -1,13 +1,25 @@
 # Clean-room denylist for NoteCraft.
 #
-# Format: one term per line; matching is a case-insensitive substring match; a line starting
+# Format: one term per line; matching is case-insensitive and on whole words; a line starting
 # with `#` is a comment; blank lines are ignored.
 #
-# Maintained by the spec room (the separate spec repository, the only place the reference
-# product is studied): it supplies the terms with each copy of the spec — third-party brand
-# names and identifiers that must never appear in this repository.
+# Supplied by the spec room (the separate spec repository, the only place the reference product
+# is studied) with spec gate-1.4. This file is the only place in this repository where these
+# terms may appear.
 #
-# The cleanroom-auditor agent (.claude/agents/cleanroom-auditor.md) fails a diff that
-# contains any term below.
-#
-# No terms yet.
+# The cleanroom-auditor agent (.claude/agents/cleanroom-auditor.md) fails a diff that contains
+# any term below, except that a hit on the first term alone (lower case) is checked by hand: it
+# is also an ordinary English word. The future importer (lot L4) may name the product in
+# import messages and help (craft-contrib standards/naming.md, rule 3); that will need a
+# limited exception for its crate, decided then.
+Notion
+Notion Labs
+notion.so
+notion.site
+notionhq
+notion-client
+Notion-Version
+Notion AI
+Notion Calendar
+Notion Mail
+Notion Sites
