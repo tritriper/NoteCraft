@@ -16,3 +16,4 @@ notecraft-md = { workspace = true }
 notecraft-query = { workspace = true }
 notecraft-store = { workspace = true }
 notecraft-search = { workspace = true }
+serde_json = { workspace = true }

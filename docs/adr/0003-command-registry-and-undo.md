@@ -1,6 +1,6 @@
 # ADR 0003 — Command registry, parameter schemas and undo by file snapshots
 
-- **Status:** proposed (lead tech, for US-L0-02); accepted when US-L0-02 merges into `dev`
+- **Status:** accepted (US-L0-02)
 - **Date:** 2026-11-27
 - **Story:** US-L0-02, session, undo/redo and command registry (F-CMD-01, F-CMD-02, F-CMD-03)
 

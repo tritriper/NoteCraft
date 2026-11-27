@@ -13,7 +13,8 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **A** agent interfa
 ## M0 — Foundations (L0)
 
 ### 1. No engine, workspace or agent surfaces (F, A, FF)
-- **Missing:** session, undo and the command registry; workspace on disk; stable ids; CLI; MCP
+- **Done (US-L0-02):** session, undo/redo and the command registry ([ADR 0003](adr/0003-command-registry-and-undo.md)).
+- **Missing:** workspace on disk; stable ids; CLI; MCP
   server; control channel; atomic multi-file transactions and crash recovery; workspace lock;
   benchmark harness; surface parity test; Markdown parser prototype; hostile-parameter sweep; the
   egui window and the web build of the app.
