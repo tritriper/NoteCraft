@@ -345,6 +345,7 @@ dependencies = [
  "notecraft-md",
  "notecraft-model",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

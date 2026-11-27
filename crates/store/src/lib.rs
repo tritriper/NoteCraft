@@ -9,14 +9,21 @@
 
 mod error;
 mod format;
+mod journal;
 mod manifest;
 mod path;
 mod project;
+mod sweep;
 mod workspace;
 
 pub use error::{CorruptReason, ManifestError, PathError, StoreError};
 pub use format::{FORMAT_FAMILY, FORMAT_VERSION};
+pub use journal::{
+    JOURNAL_DIR, JOURNAL_FAMILY, JOURNAL_HEAD, JOURNAL_MAX_BYTES, JOURNAL_MAX_ENTRIES, Journal, JournalEntry, JournalError, digest, is_reserved,
+    journal_blob,
+};
 pub use manifest::{FormatCheck, MANIFEST_MAX_BYTES, Manifest, format_created};
 pub use path::RelPath;
 pub use project::{Project, WORKSPACE_DIR};
+pub use sweep::Swept;
 pub use workspace::{Counts, MANIFEST, OpenMode, ReadOnlyReason, Workspace};

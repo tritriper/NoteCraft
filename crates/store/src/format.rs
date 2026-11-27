@@ -21,6 +21,29 @@ pub(crate) static WORKSPACE: Family<'static, ManifestError> = Family {
     formats: Formats { hand: &[], folded: &[], pending: &[] },
 };
 
+/// The journal's tag before the number in `head.json`'s `format` (ADR 0006 #5).
+pub const JOURNAL_FAMILY: &str = "notecraft-journal";
+
+/// A journal tag craft-format refused; the message is ours (a tag can be megabytes).
+#[derive(Debug)]
+pub(crate) struct JournalTagError;
+
+impl From<FormatError> for JournalTagError {
+    fn from(_: FormatError) -> JournalTagError {
+        JournalTagError
+    }
+}
+
+pub(crate) static JOURNAL: Family<'static, JournalTagError> = Family {
+    app: "NoteCraft",
+    noun: "journal",
+    prefix: JOURNAL_FAMILY,
+    legacy_prefix: None,
+    untagged: None,
+    aliases: &[],
+    formats: Formats { hand: &[], folded: &[], pending: &[] },
+};
+
 impl From<FormatError> for ManifestError {
     /// Our own short message: craft-format's text repeats the tag, and a tag can be megabytes.
     fn from(_: FormatError) -> ManifestError {

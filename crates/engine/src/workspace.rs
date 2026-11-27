@@ -4,10 +4,12 @@
 use std::path::{Path, PathBuf};
 
 use notecraft_model::{GenError, Settings, Workspace as Model};
-use notecraft_store::{CorruptReason, OpenMode, Project, StoreError, Workspace, format_created};
+use notecraft_store::{CorruptReason, JOURNAL_HEAD, Journal, OpenMode, Project, ReadOnlyReason, RelPath, StoreError, Workspace, format_created};
 use serde_json::{Map, Value, json};
 
 use crate::error::{CmdError, CmdResult, ErrorCode};
+use crate::files::DiskFiles;
+use crate::journal::{Recovery, recover};
 use crate::registry::Lifecycle;
 use crate::roots::confine;
 use crate::session::Session;
@@ -100,7 +102,39 @@ fn open(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
     let project = Project::new(project_dir(params)?);
     check_roots(session, &project, false)?;
     let mode = if params.get("readOnly").and_then(Value::as_bool) == Some(true) { OpenMode::ReadOnly } else { OpenMode::ReadWrite };
-    let workspace = Workspace::open(&project, mode).map_err(store_error)?;
+    let mut workspace = Workspace::open(&project, mode).map_err(store_error)?;
+    let writable = writable(session, workspace.dir());
+    let mut recovery = Value::Null;
+    // Staging folders live in the project folder: sweep them only when it is inside the write root.
+    let project_writable = session.roots().is_none_or(|r| confine(project.dir(), r.write()).is_ok());
+    let sweep = |w: &Workspace| {
+        let _ = if project_writable { w.sweep() } else { w.sweep_workspace() };
+    };
+    if workspace.read_only().is_none() && writable {
+        // Roll back an interrupted multi-file command before anything else (ADR 0006 #6).
+        let mut files = DiskFiles(workspace.clone());
+        match recover(&mut files) {
+            Recovery::Nothing => {
+                sweep(&workspace);
+            }
+            Recovery::RolledBack { command, restored } => {
+                recovery = json!({ "state": "rolled_back", "command": command, "restored": restored });
+                sweep(&workspace);
+            }
+            Recovery::Refused(r) => {
+                recovery = json!({
+                    "state": "refused",
+                    "reason": r.reason,
+                    "command": r.command,
+                    "paths": r.paths,
+                    "message": r.message,
+                });
+                workspace = workspace.with_read_only(ReadOnlyReason::Recovery);
+            }
+        }
+    } else if let Some(command) = pending_head(&workspace) {
+        recovery = json!({ "state": "pending", "command": command });
+    }
     let manifest = workspace.manifest();
     let reason = workspace.read_only().map(|r| r.as_str());
     let result = json!({
@@ -111,10 +145,21 @@ fn open(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
         "notice": manifest.notice,
         "format": manifest.format,
         "conflicts": [],
+        "recovery": recovery,
     });
-    let writable = writable(session, workspace.dir());
     session.install(Some(Opened { workspace, writable }));
     Ok(result)
+}
+
+/// For a handle that may not write: `Some(command)` when a journal head exists (the command is
+/// `null` when the head cannot be read or parsed), `None` when there is no head.
+fn pending_head(workspace: &Workspace) -> Option<Value> {
+    let head = RelPath::parse(JOURNAL_HEAD).ok()?;
+    match workspace.read(&head) {
+        Ok(None) => None,
+        Ok(Some(bytes)) => Some(Journal::parse(&bytes).map_or(Value::Null, |j| json!(j.command))),
+        Err(_) => Some(Value::Null),
+    }
 }
 
 /// The project folder's last component, or `Untitled`.

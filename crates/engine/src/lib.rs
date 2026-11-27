@@ -14,6 +14,7 @@ mod ctx;
 mod error;
 mod files;
 mod history;
+mod journal;
 mod registry;
 mod roots;
 mod schema;

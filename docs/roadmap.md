@@ -31,7 +31,7 @@ the project tracker; acceptance criteria are in the behaviour spec (`plan/spec/`
 | US-L0-07 | Empty egui window, off-screen capture and wasm build | planned |
 | US-L0-08 | Hostile-parameter sweep | planned |
 | US-L0-09 | Control channel | planned |
-| US-L0-10 | Atomic multi-file transactions and crash recovery | planned |
+| US-L0-10 | Atomic multi-file transactions and crash recovery | done |
 | US-L0-11 | Workspace lock and single engine | planned |
 | US-L0-12 | Benchmark harness and synthetic corpus | planned |
 | US-L0-13 | Surface parity test | planned |

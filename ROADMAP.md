@@ -18,7 +18,7 @@ is the summary. The detail is in:
 
 | Milestone | Status | Stories done |
 |---|---|---|
-| M0 Foundations (L0) | in progress | 3 / 14 |
+| M0 Foundations (L0) | in progress | 5 / 14 |
 | M1 Pages, core (L1a) | planned | 0 / 21 |
 | M1.5 Pages, robustness (L1b) | planned | 0 / 9 |
 | M2 Databases (L2) | planned | 0 / 20 |
