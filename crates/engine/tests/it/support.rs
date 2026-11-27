@@ -1,9 +1,9 @@
 //! Fixtures: a temp dir, a `Files` over it, a failing variant and the test commands.
-#![allow(dead_code)]
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use notecraft_engine::{CmdError, CmdResult, CommandSpec, Ctx, ErrorCode, Field, FileError, Files, Handler, Kind, ParamsSchema, Registry, Session};
 use serde_json::{Map, Value, json};
@@ -113,6 +113,49 @@ impl Files for FailingFiles {
     fn remove(&mut self, path: &str) -> Result<(), FileError> {
         self.inner.remove(path)
     }
+}
+
+/// Panics in `read` once `armed`, and in the `panic_write`-th call to `write` (1-based).
+pub struct PanickyFiles {
+    inner: DirFiles,
+    armed: Arc<AtomicBool>,
+    panic_write: usize,
+    writes: usize,
+}
+
+impl Files for PanickyFiles {
+    fn read(&self, path: &str) -> Result<Option<Vec<u8>>, FileError> {
+        if self.armed.load(Ordering::SeqCst) {
+            panic!("deliberate panic in Files::read");
+        }
+        self.inner.read(path)
+    }
+    fn write(&mut self, path: &str, bytes: &[u8]) -> Result<(), FileError> {
+        self.writes += 1;
+        if self.writes == self.panic_write {
+            panic!("deliberate panic in Files::write");
+        }
+        self.inner.write(path, bytes)
+    }
+    fn remove(&mut self, path: &str) -> Result<(), FileError> {
+        self.inner.remove(path)
+    }
+}
+
+/// A session over `PanickyFiles`; set the returned flag to make every `read` panic.
+pub fn panicky_session(dir: &TempDir, panic_write: usize) -> (Session, Arc<AtomicBool>) {
+    let armed = Arc::new(AtomicBool::new(false));
+    let files = PanickyFiles { inner: DirFiles(dir.path().to_path_buf()), armed: Arc::clone(&armed), panic_write, writes: 0 };
+    (Session::with_files(registry(), Box::new(files)), armed)
+}
+
+fn panicking_enabled(_: &Session) -> Option<&'static str> {
+    panic!("deliberate panic in an enabled function");
+}
+
+/// A command whose `enabled` panics.
+pub fn enabled_panics_spec(id: &'static str) -> CommandSpec {
+    CommandSpec { enabled: panicking_enabled, ..spec(id) }
 }
 
 // ---- test commands ----

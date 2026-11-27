@@ -96,3 +96,62 @@ fn command_that_must_write_without_a_workspace_is_disabled() {
     assert_eq!(code(&e), "disabled");
     assert!(!s.can_undo());
 }
+
+fn assert_internal(e: &notecraft_engine::CmdError) {
+    assert_eq!(code(e), "io");
+    assert_eq!(detail(e, "reason"), Some("internal"));
+}
+
+// SPEC §4.2 (review round 1): a panic in a registered `enabled` function must not unwind out.
+#[test]
+fn panic_in_enabled_is_an_internal_error_and_changes_nothing() {
+    let dir = TempDir::new();
+    dir.put("a.md", "v0");
+    let mut registry = registry();
+    registry.register(enabled_panics_spec("test.enabledPanics")).unwrap();
+    let mut s = Session::with_files(registry, Box::new(DirFiles(dir.path().to_path_buf())));
+    write_ok(&mut s, &[("a.md", "v1")]);
+    let snap = snapshot(&dir);
+
+    let e = s.run("test.enabledPanics", &json!({})).unwrap_err();
+    assert_internal(&e);
+    assert_eq!(snapshot(&dir), snap);
+    assert!(s.can_undo());
+    assert!(!s.can_redo());
+}
+
+// SPEC §4.2 (review round 1): a panic in `Files::read` while undo checks the files.
+#[test]
+fn panic_in_files_read_during_undo_is_an_internal_error_and_changes_nothing() {
+    let dir = TempDir::new();
+    dir.put("a.md", "v0");
+    let (mut s, armed) = panicky_session(&dir, usize::MAX);
+    write_ok(&mut s, &[("a.md", "v1")]);
+    let snap = snapshot(&dir);
+
+    armed.store(true, std::sync::atomic::Ordering::SeqCst);
+    let e = s.run("edit.undo", &json!({})).unwrap_err();
+    assert_internal(&e);
+    armed.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(snapshot(&dir), snap);
+    assert!(s.can_undo());
+    assert!(!s.can_redo());
+    // The session is still usable and the step is still there.
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(dir.get("a.md").as_deref(), Some("v0"));
+}
+
+// SPEC §4.2 (review round 1): a panic in `Files::write` during commit restores the first file.
+#[test]
+fn panic_in_files_write_during_commit_restores_files_and_pushes_no_step() {
+    let dir = TempDir::new();
+    dir.put("a.md", "v0");
+    let (mut s, _armed) = panicky_session(&dir, 2);
+    let before = snapshot(&dir);
+
+    let e = s.run("test.writeFiles", &writes(&[("a.md", "v1"), ("b.md", "new")])).unwrap_err();
+    assert_internal(&e);
+    assert_eq!(snapshot(&dir), before);
+    assert!(!s.can_undo());
+    assert!(!s.can_redo());
+}
