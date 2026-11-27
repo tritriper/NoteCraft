@@ -541,8 +541,11 @@ struct Case {
     stale: bool,
 }
 
+/// Makes `.cache/` and removes the persistent lock file that `workspace.create` writes (ADR 0007),
+/// so a case can plant something else at `.cache/lock`.
 fn cache(ws: &Path) {
     std::fs::create_dir_all(ws.join(".cache")).unwrap();
+    let _ = std::fs::remove_file(ws.join(".cache/lock"));
 }
 
 /// Removes `.cache/` so that a file or a link can take its place.

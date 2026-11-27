@@ -101,7 +101,7 @@ fn at_l0_03_h_a_name_less_workspace_is_named_after_its_project() {
         assert_ne!(r["name"], json!("notecraft"));
         assert_eq!(info(&mut s).unwrap()["name"], json!(want));
         s.run("workspace.close", &json!({})).unwrap();
-        assert_eq!(tree(dir.path()), before, "opening must not rewrite the manifest");
+        assert_eq!(without_new_lock_file(tree(dir.path()), &before), before, "opening must not rewrite the manifest");
     }
 }
 
@@ -231,7 +231,7 @@ fn a_manifest_with_only_format_and_id_opens() {
         let want = name.unwrap_or("my-project");
         assert_eq!(i["name"], json!(want), "{label}");
         assert_eq!(r["name"], json!(want), "{label}");
-        assert_eq!(tree(dir.path()), before, "{label}");
+        assert_eq!(without_new_lock_file(tree(dir.path()), &before), before, "{label}");
     }
 }
 
@@ -245,4 +245,22 @@ fn info_counts_rows_apart_from_pages() {
     write_ok(&mut s, &[("pages/d/database.md", "x"), ("pages/d/rows/r.md", "x")]);
     let i = info(&mut s).unwrap();
     assert_eq!((i["pages"].clone(), i["databases"].clone(), i["rows"].clone()), (json!(0), json!(1), json!(1)));
+}
+
+/// The first read-write open of a hand-made workspace adds the persistent, empty, gitignored
+/// `.cache/lock` (ADR 0007) and its folder; drops exactly those new entries, so anything else that
+/// changed still shows.
+fn without_new_lock_file(
+    mut after: std::collections::BTreeMap<String, Entry>,
+    before: &std::collections::BTreeMap<String, Entry>,
+) -> std::collections::BTreeMap<String, Entry> {
+    let new: Vec<String> = after.keys().filter(|k| !before.contains_key(*k)).cloned().collect();
+    for k in new {
+        let lock = k.ends_with("/.cache/lock") && matches!(after.get(&k), Some(Entry::File { bytes, .. }) if bytes.is_empty());
+        let cache = k.ends_with("/.cache") && matches!(after.get(&k), Some(Entry::Dir));
+        if lock || cache {
+            after.remove(&k);
+        }
+    }
+    after
 }

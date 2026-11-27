@@ -126,6 +126,8 @@ fn holder_parse_clips_a_huge_command_and_keeps_strange_characters_valid() {
 #[test]
 fn a_lock_file_that_is_a_folder_gives_io_and_the_folder_stays() {
     let f = fx();
+    // `create` writes the persistent lock file (ADR 0007); a folder replaces it.
+    let _ = std::fs::remove_file(f.ws.join(LOCK_FILE));
     std::fs::create_dir(f.ws.join(LOCK_FILE)).unwrap();
     std::fs::write(f.ws.join(LOCK_FILE).join("mine"), "x").unwrap();
     assert_io(&try_lock(&f.project), "folder");
