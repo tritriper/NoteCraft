@@ -25,7 +25,7 @@ the project tracker; acceptance criteria are in the behaviour spec (`plan/spec/`
 | US-L0-01 | Repository scaffold and `cargo xtask ci` | done |
 | US-L0-02 | Session, undo/redo and command registry | done |
 | US-L0-03 | Create and open a workspace in a `.craft` project | planned |
-| US-L0-04 | Stable identifiers | planned |
+| US-L0-04 | Stable identifiers | done |
 | US-L0-05 | Minimal CLI | planned |
 | US-L0-06 | Minimal MCP server | planned |
 | US-L0-07 | Empty egui window, off-screen capture and wasm build | planned |

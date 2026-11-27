@@ -52,7 +52,7 @@ snapshots back after checking that no file changed outside (`conflict`).
 ### Ids ([ADR 0004](adr/0004-stable-ids.md))
 
 Every item has one `Id` (`model`) for its whole life: a UUIDv7 written as 26 Crockford base32
-characters in upper case. Lower case is accepted on read; other variants are refused. Ids never
+characters in upper case. Lower case is accepted on read; other spellings (I/L/O aliases, hyphens, spaces) are refused; any 128-bit value is accepted on read. Ids never
 derive from a title or a path, and nothing changes them. `IdGen` keeps ids from one session in
 creation order, even within one millisecond or when the clock goes back. It reads the time
 through the `Clock` port and randomness through the `Entropy` port, so it never panics on any

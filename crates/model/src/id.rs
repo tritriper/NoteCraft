@@ -23,7 +23,7 @@ pub enum IdError {
 impl fmt::Display for IdError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            IdError::Length { found } => write!(f, "an id has {} characters, found {found} bytes", Id::LEN),
+            IdError::Length { found } => write!(f, "an id has {} bytes, found {found}", Id::LEN),
             IdError::Char { index } => write!(f, "invalid character in id at byte {index}"),
             IdError::Overflow => write!(f, "id is too large: the first character must be 0 to 7"),
         }
