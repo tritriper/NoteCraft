@@ -72,6 +72,11 @@ impl Id {
     pub const fn to_bytes(self) -> [u8; 16] {
         self.0.to_be_bytes()
     }
+
+    /// The 48-bit millisecond timestamp of a UUIDv7 id (its top 48 bits).
+    pub const fn timestamp_ms(self) -> u64 {
+        (self.0 >> 80) as u64
+    }
 }
 
 impl fmt::Display for Id {
