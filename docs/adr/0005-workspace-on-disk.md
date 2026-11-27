@@ -1,7 +1,8 @@
 # ADR 0005 — The workspace on disk: project access in the store, lifecycle in the session
 
 - **Status:** accepted (US-L0-03); amended 2026-11-27 for spec gate-1.2 (D-43): #4, #5, #8 and
-  #11 changed, #12 to #14 added (see "Amendments")
+  #11 changed, #12 to #14 added; amended 2026-11-27 for spec gate-1.5 (D-45, D-46): #4, #6, #13
+  and #14 changed by [ADR 0008](0008-transactions-and-lock-follow-gate-1-5.md) (see "Amendments")
 - **Date:** 2026-11-27
 - **Story:** US-L0-03, create and open a workspace in a `.craft` project (F-WS-01, F-WS-02,
   F-WS-04, F-GT-01; EF-01, ENF-01, ENF-02, ENF-12)
@@ -84,3 +85,18 @@ The spec room answered the open points of this story. What changed:
 - #13: `workspace.info` counts `pages`, `databases` and `rows` apart, without the trash.
 - #14: the default name comes from the project folder, else "Untitled" (new AT-L0-03-h). It moves from the engine to `store::Project`.
 - #7 is unchanged. The spec now agrees with it: commands.md §1.1 says a read-only workspace gives `read_only`, not `disabled`. A newer format opens with `readOnly: true` and a notice (AT-L0-03-c reworded).
+
+### 2026-11-27 — spec gate-1.5 (D-45, D-46, notecraft-spec `4505406`)
+
+[ADR 0008](0008-transactions-and-lock-follow-gate-1-5.md) decides the details; in short:
+
+- #4: a blank `name` is absent (the default name applies) and a given name is stored trimmed
+  (AT-L0-03-h); the sentence "A blank `name` parameter stays `invalid_params`" of #14 no longer
+  holds. The refusals already match AT-L0-03-i. `create` writes `.local/lock`, not `.cache/lock`,
+  and its `.gitignore` lists `.cache/` and `.local/`.
+- #6, #7: the read-only reason token for a newer format is `newerFormat`; `noLock` is added
+  (ADR 0008 #10, #12).
+- #13: a page whose file cannot be read counts as not trashed; it no longer makes the count
+  `null`.
+- Consequences: `workspace.open` reports `recovery` and `staleLock` in the gate-1.5 shape
+  (ADR 0008 #11).

@@ -1,6 +1,7 @@
 # ADR 0007 — One writer at a time: an OS lock per command in `.cache/lock`, stale holders recovered
 
-- **Status:** accepted (US-L0-11)
+- **Status:** accepted (US-L0-11); amended in round 3 (#4); #3 to #11 amended on 2026-11-27 for
+  spec gate-1.5 (D-45) by [ADR 0008](0008-transactions-and-lock-follow-gate-1-5.md) (see "Amendments")
 - **Date:** 2026-11-27
 - **Story:** US-L0-11, workspace lock and single engine (F-CMD-11; ENF-03)
 
@@ -103,3 +104,24 @@ other decisions are unchanged:
 The review's two wording fixes are folded in. `.cache` is checked by `symlink_metadata` as a direct
 child of the canonical workspace folder, not by the store's confinement. The Windows sentence no
 longer sits inside the release sequence.
+
+### 2026-11-27 — spec gate-1.5 (D-45, notecraft-spec `4505406`)
+
+The spec room answered this story's open points. [ADR 0008](0008-transactions-and-lock-follow-gate-1-5.md)
+decides the details; in short:
+
+- #1 stays: one lock per mutating command, which is one transaction; "single engine" is one
+  engine crate used by several processes (US-L0-11 definitions now say so).
+- #3, #4: the lock file is `.local/lock` and the record `.local/lock.json`; the persistent lock
+  file, the real-folder checks and the identity check move from `.cache/` to `.local/`
+  (ADR 0008 #1).
+- #5: the record is `{process, pid, host, since}` (file-format §9.1); `host` is `null` in L0
+  (ADR 0008 #9, #14).
+- #6: `staleLock` is a boolean, `true` when the open cleared a stale record (ADR 0008 #11).
+- #7: recovery under the lock now replays the journal (ADR 0008 #6).
+- #8: `disabled`/`locked` keeps `details.holder` and loses `details.cause`; a read-write open no
+  longer waits: it tries once and, if the lock is busy, opens without recovery (ADR 0008 #10).
+- #9: no advisory lock opens the workspace read-only with `readOnlyReason: "noLock"`, and a
+  command that meets `Unsupported` returns `read_only` (ADR 0008 #10). The open point is closed.
+- #10, #11: failures of the lock at open give `noLock` instead of `io`; at a command they stay
+  `io` (ADR 0008 #10).
