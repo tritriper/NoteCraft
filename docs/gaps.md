@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-11-26 · **Last updated:** 2026-11-26 · **Change:** major (regrouped by the lots of the behaviour spec, draft 2)
+> **Last reviewed:** 2026-11-26 · **Last updated:** 2026-11-27 · **Change:** major (regrouped by the lots of the behaviour spec, draft 2)
 
 Everything known to be missing, grouped by the milestone that delivers it
 ([roadmap.md](roadmap.md)). This is the work list: when a story lands, remove or shrink its entry
@@ -14,8 +14,7 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **A** agent interfa
 
 ### 1. No engine, workspace or agent surfaces (F, A, FF)
 - **Done (US-L0-02):** session, undo/redo and the command registry ([ADR 0003](adr/0003-command-registry-and-undo.md)).
-- **Missing:** workspace on disk; stable ids; CLI; MCP
-  server; control channel; atomic multi-file transactions and crash recovery; workspace lock;
+- **Missing:** workspace on disk; stable ids; CLI; MCP server; control channel; atomic multi-file transactions and crash recovery; workspace lock;
   benchmark harness; surface parity test; Markdown parser prototype; hostile-parameter sweep; the
   egui window and the web build of the app.
 - **Stories:** US-L0-02 to US-L0-14. The `.craft` project format is not settled

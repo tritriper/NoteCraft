@@ -11,7 +11,7 @@ const MAX_ARRAY_ITEMS: usize = 10_000;
 /// A parameter type.
 #[derive(Debug, Clone, Copy)]
 pub enum Kind {
-    /// A string of at most `max_len` bytes.
+    /// A string of at most `max_len` characters (and never more than 1 MiB).
     String {
         max_len: usize,
     },
@@ -105,8 +105,9 @@ fn validate_value(kind: &Kind, v: &Value, path: &str) -> Result<(), CmdError> {
         Kind::String { max_len } => {
             let s = v.as_str().ok_or_else(|| wrong(path, "a string", v))?;
             let limit = (*max_len).min(MAX_STRING_BYTES);
-            if s.len() > limit {
-                return Err(CmdError::invalid(Some(path), format!("{path}: longer than {limit} bytes")));
+            // The byte cap is the cheap first check; the declared limit counts characters.
+            if s.len() > MAX_STRING_BYTES || s.chars().count() > limit {
+                return Err(CmdError::invalid(Some(path), format!("{path}: longer than {limit} characters")));
             }
         }
         Kind::Integer { min, max } => {
@@ -220,6 +221,13 @@ mod tests {
     fn declared_limits_are_capped() {
         let big = "a".repeat(MAX_STRING_BYTES + 1);
         assert_eq!(field_of(json!({ "list": [], "huge": big })).as_deref(), Some("huge"));
+    }
+
+    #[test]
+    fn max_len_counts_characters_not_bytes() {
+        // "ééé" is 3 characters and 6 bytes; the limit of `p` is 3.
+        assert!(S.validate(&json!({ "list": [{ "p": "ééé" }] })).is_ok());
+        assert_eq!(field_of(json!({ "list": [{ "p": "éééé" }] })).as_deref(), Some("list.0.p"));
     }
 
     #[test]

@@ -50,7 +50,8 @@ impl Session {
             .get(id)
             .ok_or_else(|| CmdError::new(ErrorCode::UnknownCommand, format!("unknown command {id:?}")).with_detail("id", id))?;
         spec.params.validate(params)?;
-        if let Some(reason) = (spec.enabled)(self) {
+        let enabled = catch_unwind(AssertUnwindSafe(|| (spec.enabled)(self))).map_err(|_| CmdError::internal())?;
+        if let Some(reason) = enabled {
             return Err(CmdError::disabled(id, reason));
         }
         match spec.run {
@@ -79,11 +80,13 @@ impl Session {
     fn travel(&mut self, undo: bool) -> CmdResult {
         let files = self.files.as_deref().ok_or_else(no_workspace)?;
         let stack = if undo { &self.history.undo } else { &self.history.redo };
-        let step = stack.back().ok_or_else(|| CmdError::disabled(if undo { "edit.undo" } else { "edit.redo" }, "nothing_to_do"))?;
+        let step = stack.back().ok_or_else(|| {
+            if undo { CmdError::disabled("edit.undo", "nothing_to_undo") } else { CmdError::disabled("edit.redo", "nothing_to_redo") }
+        })?;
         let expected = |c: &Change| if undo { c.after.clone() } else { c.before.clone() };
         let target = |c: &Change| if undo { c.before.clone() } else { c.after.clone() };
         for c in &step.changes {
-            if files.read(&c.path)? != expected(c) {
+            if safe_read(files, &c.path)? != expected(c) {
                 return Err(CmdError::new(
                     ErrorCode::Conflict,
                     format!("{} changed since the command ran; nothing was {}", c.path, if undo { "undone" } else { "redone" }),
@@ -129,6 +132,14 @@ impl Session {
             e.message = format!("{}; could not restore: {}", e.message, unrestored.join(", "));
             Err(e.with_detail("unrestored", json!(unrestored)))
         }
+    }
+}
+
+/// `Files::read` behind the panic backstop.
+fn safe_read(files: &dyn Files, path: &str) -> Result<Option<Vec<u8>>, CmdError> {
+    match catch_unwind(AssertUnwindSafe(|| files.read(path))) {
+        Ok(r) => Ok(r?),
+        Err(_) => Err(CmdError::internal()),
     }
 }
 

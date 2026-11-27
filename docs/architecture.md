@@ -2,8 +2,8 @@
 
 > **Last reviewed:** 2026-11-25 · **Last updated:** 2026-11-27 · **Change:** minor (engine: session, undo and command registry)
 
-How NoteCraft is built. At this stage it is a placeholder: the crates exist but hold no
-behaviour. The behaviour spec is being written in a separate spec repository; once the lead tech
+How NoteCraft is built. At this stage (lot L0) the engine has the session, undo and the
+command registry; the other crates are still empty. The behaviour spec is being written in a separate spec repository; once the lead tech
 settles the architecture from it, this file becomes the committed, current summary (the longer
 working notes stay in the gitignored `plan/architecture.md`). Rules for working in the code are
 in [`AGENTS.md`](../AGENTS.md); decisions are in [`adr/`](adr/).
@@ -31,7 +31,7 @@ that nothing but `ui-egui` uses egui, eframe, winit or rfd. The table lives in
 ## Principles
 
 1. **Everything is a command.** Each user-visible action is a `CommandSpec` with a stable id,
-   label, shortcut, parameter description and `run` function. The UI, shortcuts, the CLI, the
+   label, shortcut, parameter schema and `run` function. The UI, shortcuts, the CLI, the
    control channel and MCP all call the same session by id, with the same parameters and errors.
 2. **Text is the source of truth.** Pages and databases live as files that diff and merge in Git;
    anything binary (index, cache) is rebuilt from them.
