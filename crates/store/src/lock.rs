@@ -119,8 +119,10 @@ impl Drop for WriteLock {
         }
         // Unix: unlink before unlock, so a waiter that wakes on the unlinked file starts again.
         // Windows: unlock and close, then delete (a sharing violation is harmless).
-        #[cfg(not(windows))]
-        let _ = fs::remove_file(&self.lock_path);
+        #[cfg(unix)]
+        if self.file.as_ref().is_some_and(|f| native::same_file(f, &self.lock_path)) {
+            let _ = fs::remove_file(&self.lock_path);
+        }
         #[cfg(windows)]
         if let Some(f) = &self.file {
             let _ = f.unlock();
@@ -180,7 +182,6 @@ mod native {
     use std::time::{Duration, Instant};
 
     use super::{Holder, LOCK_FILE, LOCK_RECORD, LockError, WriteLock, read_record, read_regular};
-    use crate::path::RelPath;
     use crate::workspace::Workspace;
 
     /// Each retry needs another process to have released the lock, so this only stops a runaway.
@@ -214,21 +215,25 @@ mod native {
 
     /// Whether this error means that the file system has no locks.
     fn no_locks(e: &io::Error) -> bool {
-        if e.kind() == io::ErrorKind::Unsupported {
-            return true;
-        }
-        #[cfg(unix)]
-        if e.raw_os_error() == Some(ENOLCK) {
-            return true;
-        }
+        e.kind() == io::ErrorKind::Unsupported || is_enolck(e)
+    }
+
+    #[cfg(unix)]
+    fn is_enolck(e: &io::Error) -> bool {
+        e.raw_os_error() == Some(ENOLCK)
+    }
+
+    #[cfg(not(unix))]
+    fn is_enolck(_e: &io::Error) -> bool {
         false
     }
 
     /// Makes sure `.cache` is a real folder; returns whether this call created it.
     fn ensure_cache(ws: &Workspace) -> Result<bool, LockError> {
         let cache = ws.dir().join(".cache");
-        let rel = RelPath::parse(".cache").map_err(|e| io_err(&cache, format!("{e:?}")))?;
-        ws.confined(&rel).map_err(|e| io_err(&cache, e))?;
+        // `ws.dir()` is canonical and `.cache` is its direct child: a link there is refused below,
+        // by `symlink_metadata`, and nothing is resolved twice, so a `.cache` that another writer
+        // creates meanwhile is never mistaken for a dangling link.
         match fs::symlink_metadata(&cache) {
             Ok(m) if m.file_type().is_dir() => Ok(false),
             Ok(_) => Err(refuse(&cache, "not a folder")),
@@ -242,7 +247,7 @@ mod native {
     }
 
     enum Opened {
-        File(File, bool),
+        File(File),
         Retry,
     }
 
@@ -258,15 +263,20 @@ mod native {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 opts.create_new(true);
                 match opts.open(path) {
-                    Ok(f) => Ok(Opened::File(f, true)),
+                    Ok(f) => Ok(Opened::File(f)),
                     Err(e) if matches!(e.kind(), io::ErrorKind::AlreadyExists | io::ErrorKind::NotFound) => Ok(Opened::Retry),
+                    // Windows: a file that is delete-pending refuses to be opened or created.
+                    #[cfg(windows)]
+                    Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Ok(Opened::Retry),
                     Err(e) => Err(io_err(path, e)),
                 }
             }
             Err(e) => Err(io_err(path, e)),
             Ok(m) if m.file_type().is_file() => match opts.open(path) {
-                Ok(f) => Ok(Opened::File(f, false)),
+                Ok(f) => Ok(Opened::File(f)),
                 Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(Opened::Retry),
+                #[cfg(windows)]
+                Err(e) if e.kind() == io::ErrorKind::PermissionDenied => Ok(Opened::Retry),
                 Err(e) => Err(io_err(path, e)),
             },
             Ok(_) => Err(refuse(path, "not a regular file")),
@@ -274,7 +284,7 @@ mod native {
     }
 
     #[cfg(unix)]
-    fn same_file(file: &File, path: &Path) -> bool {
+    pub(super) fn same_file(file: &File, path: &Path) -> bool {
         use std::os::unix::fs::MetadataExt;
         match (file.metadata(), fs::symlink_metadata(path)) {
             (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino(),
@@ -303,12 +313,12 @@ mod native {
         }
     }
 
-    /// Gives up: closes the handle, removes what this acquisition made.
-    fn abandon(file: File, created_file: bool, lock_path: &Path, created_cache: bool, cache: &Path) {
+    /// Gives up: closes the handle. The lock file is never unlinked here: another process may hold
+    /// the very file this handle failed to lock, and unlinking it would let a third one in. Only
+    /// the holder's release removes it. An empty `.cache` is removed (`remove_dir` refuses a
+    /// folder that still has a lock file in it).
+    fn abandon(file: File, created_cache: bool, cache: &Path) {
         drop(file);
-        if created_file {
-            let _ = fs::remove_file(lock_path);
-        }
         if created_cache {
             let _ = fs::remove_dir(cache);
         }
@@ -342,9 +352,13 @@ mod native {
                 Ok(c) => created_cache |= c,
                 Err(e) => return Err(fail(e, created_cache)),
             }
-            let (file, created_file) = match open_lock_file(&lock_path) {
-                Ok(Opened::File(f, c)) => (f, c),
-                Ok(Opened::Retry) => continue,
+            let file = match open_lock_file(&lock_path) {
+                Ok(Opened::File(f)) => f,
+                Ok(Opened::Retry) => {
+                    // Another process is making or removing the file: let it finish.
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
                 Err(e) => return Err(fail(e, created_cache)),
             };
             let mut pause = Duration::from_millis(10);
@@ -359,18 +373,18 @@ mod native {
                     Tried::Held => {
                         let left = deadline.map(|d| d.saturating_duration_since(Instant::now()));
                         if left == Some(Duration::ZERO) {
-                            abandon(file, created_file, &lock_path, created_cache, &cache);
+                            abandon(file, created_cache, &cache);
                             return Err(LockError::Held { holder: read_record(ws) });
                         }
                         std::thread::sleep(left.map_or(pause, |l| pause.min(l)));
                         pause = (pause * 2).min(Duration::from_millis(100));
                     }
                     Tried::Unsupported => {
-                        abandon(file, created_file, &lock_path, created_cache, &cache);
+                        abandon(file, created_cache, &cache);
                         return Err(LockError::Unsupported);
                     }
                     Tried::Failed(e) => {
-                        abandon(file, created_file, &lock_path, created_cache, &cache);
+                        abandon(file, created_cache, &cache);
                         return Err(io_err(&lock_path, e));
                     }
                 }
