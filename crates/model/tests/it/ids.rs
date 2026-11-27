@@ -4,7 +4,9 @@ use std::collections::HashSet;
 
 use notecraft_model::{Clock, Entropy, GenError, Id, IdError, IdGen, SystemEntropy};
 
-use crate::support::{ConstEntropy, FailOnce, FixedClock, NoClock, NoEntropy, ScriptedClock, T0, is_canonical, timestamp_ms, version_variant};
+use crate::support::{
+    ConstEntropy, FailOnCall, FailOnce, FixedClock, NoClock, NoEntropy, ScriptedClock, T0, is_canonical, timestamp_ms, version_variant,
+};
 
 fn generate_n<C: Clock, E: Entropy>(id_gen: &mut IdGen<C, E>, n: usize) -> Vec<Id> {
     (0..n).map(|_| id_gen.generate().unwrap()).collect()
@@ -170,4 +172,31 @@ fn err_generation_fails_cleanly_without_entropy_or_clock() {
     for pair in ids.windows(2) {
         assert!(pair[0] < pair[1]);
     }
+}
+
+// Errors (generation): a time that does not fit in 48 bits is refused, and the failure leaves
+// the generator as it was.
+#[test]
+fn err_clock_beyond_48_bits_fails_and_leaves_generator_unchanged() {
+    let clock = ScriptedClock::new(vec![T0, 1 << 48, u64::MAX, T0 + 1]);
+    let mut id_gen = IdGen::with_sources(clock, SystemEntropy);
+    let before = id_gen.generate().unwrap();
+    assert_eq!(id_gen.generate(), Err(GenError::Clock));
+    assert_eq!(id_gen.generate(), Err(GenError::Clock));
+    let after = id_gen.generate().unwrap();
+    assert!(before < after);
+    assert_eq!(timestamp_ms(after), T0 + 1);
+}
+
+// Errors (generation): an entropy failure on a new-millisecond draw leaves the generator as it
+// was. The clock then reads the first millisecond again, so only the kept state keeps the order.
+#[test]
+fn err_entropy_failure_on_new_millisecond_leaves_generator_unchanged() {
+    let clock = ScriptedClock::new(vec![T0, T0 + 1, T0]);
+    let entropy = FailOnCall::new(1, ConstEntropy(0x80));
+    let mut id_gen = IdGen::with_sources(clock, entropy);
+    let before = id_gen.generate().unwrap();
+    assert_eq!(id_gen.generate(), Err(GenError::Entropy));
+    let after = id_gen.generate().unwrap();
+    assert!(before < after);
 }

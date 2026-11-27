@@ -86,6 +86,27 @@ impl<E: Entropy> Entropy for FailOnce<E> {
     }
 }
 
+/// Fails the call with index `n` (0-based, counting every call), and delegates otherwise.
+pub struct FailOnCall<E> {
+    calls: usize,
+    n: usize,
+    inner: E,
+}
+
+impl<E> FailOnCall<E> {
+    pub fn new(n: usize, inner: E) -> Self {
+        Self { calls: 0, n, inner }
+    }
+}
+
+impl<E: Entropy> Entropy for FailOnCall<E> {
+    fn fill(&mut self, buf: &mut [u8]) -> Result<(), EntropyError> {
+        let call = self.calls;
+        self.calls = self.calls.saturating_add(1);
+        if call == self.n { Err(EntropyError) } else { self.inner.fill(buf) }
+    }
+}
+
 /// 26 characters, all from the upper-case Crockford alphabet, first one `0`-`7`.
 pub fn is_canonical(text: &str) -> bool {
     const ALPHABET: &str = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
