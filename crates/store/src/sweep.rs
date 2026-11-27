@@ -71,11 +71,11 @@ fn remove_orphans(dir: &Path) -> u64 {
     removed
 }
 
-/// The sweep of a workspace folder `dir`, including the staging folders of its project.
-pub(crate) fn sweep(dir: &Path) -> Swept {
+/// The sweep of a workspace folder `dir`; with `project` also the staging folders of its project.
+pub(crate) fn sweep(dir: &Path, project: bool) -> Swept {
     let mut removed = remove_orphans(dir);
-    if let Some(project) = dir.parent() {
-        removed += remove_staging(project);
+    if let (true, Some(parent)) = (project, dir.parent()) {
+        removed += remove_staging(parent);
     }
     let mut complete = true;
     let mut seen: u64 = 0;

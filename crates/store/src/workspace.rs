@@ -160,10 +160,20 @@ impl Workspace {
 
     /// Removes crash leftovers (ADR 0006 #10). Best effort: a failure on one entry is skipped.
     pub fn sweep(&self) -> Result<Swept, StoreError> {
+        self.sweep_in(true)
+    }
+
+    /// Like [`Workspace::sweep`], but touches only the workspace folder, never the project
+    /// folder around it. For a caller whose write root ends at the workspace folder (rule 18).
+    pub fn sweep_workspace(&self) -> Result<Swept, StoreError> {
+        self.sweep_in(false)
+    }
+
+    fn sweep_in(&self, project: bool) -> Result<Swept, StoreError> {
         if self.read_only.is_some() {
             return Err(StoreError::ReadOnly { path: shown(&self.dir) });
         }
-        Ok(sweep::sweep(&self.dir))
+        Ok(sweep::sweep(&self.dir, project))
     }
 
     /// The bytes of a file, or `None` when it does not exist.

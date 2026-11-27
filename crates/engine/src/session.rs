@@ -139,6 +139,9 @@ impl Session {
         }
         match spec.run {
             Handler::Apply(handler) => {
+                if spec.mutates {
+                    self.recover_pending()?;
+                }
                 let empty = Map::new();
                 let map = params.as_object().unwrap_or(&empty);
                 let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -164,8 +167,26 @@ impl Session {
         }
     }
 
+    /// Runs a pending recovery (ADR 0006 #7). A refusal fails with `io`/`recovery_pending`.
+    fn recover_pending(&mut self) -> Result<(), CmdError> {
+        if !self.recovery_pending {
+            return Ok(());
+        }
+        let files: &mut dyn Files = self.files.as_deref_mut().ok_or_else(no_workspace)?;
+        match catch_unwind(AssertUnwindSafe(|| recover(&mut *files))).map_err(|_| CmdError::internal())? {
+            Recovery::Nothing | Recovery::RolledBack { .. } => {
+                self.recovery_pending = false;
+                Ok(())
+            }
+            Recovery::Refused(r) => Err(CmdError::new(ErrorCode::Io, format!("an interrupted command could not be undone: {}", r.message))
+                .with_detail("reason", "recovery_pending")
+                .with_detail("paths", json!(r.paths))),
+        }
+    }
+
     /// Undo (`undo` true) or redo the newest step, if every file still holds what it left.
     fn travel(&mut self, undo: bool) -> CmdResult {
+        self.recover_pending()?;
         let files = self.files.as_deref().ok_or_else(no_workspace)?;
         let stack = if undo { &self.history.undo } else { &self.history.redo };
         let step = stack.back().ok_or_else(|| {
@@ -213,17 +234,8 @@ impl Session {
             return Ok(Vec::new());
         }
         self.write_gate()?;
+        self.recover_pending()?;
         let files: &mut dyn Files = self.files.as_deref_mut().ok_or_else(no_workspace)?;
-        if self.recovery_pending {
-            match catch_unwind(AssertUnwindSafe(|| recover(&mut *files))).map_err(|_| CmdError::internal())? {
-                Recovery::Nothing | Recovery::RolledBack { .. } => self.recovery_pending = false,
-                Recovery::Refused(r) => {
-                    return Err(CmdError::new(ErrorCode::Io, format!("an interrupted command could not be undone: {}", r.message))
-                        .with_detail("reason", "recovery_pending")
-                        .with_detail("paths", json!(r.paths)));
-                }
-            }
-        }
         let mut done: Vec<Staged> = Vec::new();
         let mut plan: Vec<Planned> = Vec::new();
         let mut armed = false;

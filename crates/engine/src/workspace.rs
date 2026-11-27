@@ -105,16 +105,21 @@ fn open(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
     let mut workspace = Workspace::open(&project, mode).map_err(store_error)?;
     let writable = writable(session, workspace.dir());
     let mut recovery = Value::Null;
+    // Staging folders live in the project folder: sweep them only when it is inside the write root.
+    let project_writable = session.roots().is_none_or(|r| confine(project.dir(), r.write()).is_ok());
+    let sweep = |w: &Workspace| {
+        let _ = if project_writable { w.sweep() } else { w.sweep_workspace() };
+    };
     if workspace.read_only().is_none() && writable {
         // Roll back an interrupted multi-file command before anything else (ADR 0006 #6).
         let mut files = DiskFiles(workspace.clone());
         match recover(&mut files) {
             Recovery::Nothing => {
-                let _ = workspace.sweep();
+                sweep(&workspace);
             }
             Recovery::RolledBack { command, restored } => {
                 recovery = json!({ "state": "rolled_back", "command": command, "restored": restored });
-                let _ = workspace.sweep();
+                sweep(&workspace);
             }
             Recovery::Refused(r) => {
                 recovery = json!({
