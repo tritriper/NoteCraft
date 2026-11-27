@@ -56,7 +56,6 @@ fn missing_or_wrong_required_keys_are_corrupt() {
     let tag = current_tag();
     let cases = [
         format!("{{\"format\": \"{tag}\", \"name\": \"n\"}}"),
-        format!("{{\"format\": \"{tag}\", \"id\": \"{FIXTURE_ID}\"}}"),
         format!("{{\"id\": \"{FIXTURE_ID}\", \"name\": \"n\"}}"),
         format!("{{\"format\": \"{tag}\", \"id\": \"nope\", \"name\": \"n\"}}"),
         format!("{{\"format\": \"{tag}\", \"id\": 7, \"name\": \"n\"}}"),

@@ -3,7 +3,7 @@
 use notecraft_store::{DEFAULT_NAME, Manifest, OpenMode, Project, StoreError, WORKSPACE_DIR, Workspace};
 
 use crate::support::*;
-use crate::sweep::{exists, model, put};
+use crate::sweep::model;
 
 fn read_manifest(ws: &Workspace) -> Manifest {
     Manifest::parse(&std::fs::read(ws.dir().join("workspace.json")).unwrap()).unwrap()
@@ -114,6 +114,7 @@ fn create_in_a_workspace_folder_is_refused() {
 #[cfg(unix)]
 #[test]
 fn the_sweep_stays_in_the_project_when_notecraft_is_a_symlink() {
+    use crate::sweep::{exists, put};
     let dir = TempDir::new();
     let proj = dir.path().join("proj");
     let elsewhere = dir.path().join("elsewhere");

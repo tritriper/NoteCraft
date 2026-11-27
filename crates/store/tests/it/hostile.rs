@@ -228,7 +228,7 @@ fn count_items_survives_hostile_markdown_files() {
 fn locate_survives_hostile_paths() {
     let dir = TempDir::new();
     let before = tree(dir.path());
-    let mut paths: Vec<std::path::PathBuf> = vec![
+    let paths: Vec<std::path::PathBuf> = vec![
         "".into(),
         "/".into(),
         ".".into(),
@@ -238,13 +238,15 @@ fn locate_survives_hostile_paths() {
         dir.path().join("a\u{0}b"),
     ];
     #[cfg(unix)]
-    {
+    let paths = {
+        let mut paths = paths;
         let (a, b) = (dir.path().join("loop-a"), dir.path().join("loop-b"));
         std::os::unix::fs::symlink(&b, &a).unwrap();
         std::os::unix::fs::symlink(&a, &b).unwrap();
         paths.push(a.clone());
         paths.push(a.join("notecraft"));
-    }
+        paths
+    };
     for p in &paths {
         let found = Project::locate(p, |_| true);
         if let Some(project) = found {
