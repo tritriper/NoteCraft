@@ -259,7 +259,9 @@ You check one branch diff against the clean-room wall. You never modify code.
 
 Fail the audit if the diff contains any of:
 - a third-party product brand in identifiers, file names, UI strings or docs;
-- any term from docs/cleanroom-denylist.txt (case-insensitive);
+- any term from docs/cleanroom-denylist.txt (case-insensitive, whole words; outside that
+  file; a hit on the first term alone, also an ordinary word, is checked by
+  hand);
 - text copied from the reference product beyond feature names;
 - an asset file without a row in ATTRIBUTION.md, or a bundled proprietary font;
 - code copied from GPL/LGPL/AGPL projects (flag suspicious large verbatim blocks).
