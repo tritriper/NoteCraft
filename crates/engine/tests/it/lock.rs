@@ -341,6 +341,42 @@ fn a_read_write_open_waits_for_the_lock_before_recovering() {
     assert!(opened["staleLock"].is_null(), "the lock was released, not abandoned");
 }
 
+// ADR 0007 #7: the open sweeps crash leftovers only under the lock.
+#[test]
+fn a_read_write_open_sweeps_leftovers_only_once_it_holds_the_lock() {
+    let fx = move_fixture();
+    let leftover = fx.ws.join("pages/.x.md.1-1.craft_tmp");
+    std::fs::write(&leftover, "half").unwrap();
+    let other = move_fixture();
+    let (mut s, _) = reopen(&other);
+    s.set_lock_wait(Duration::ZERO);
+
+    let guard = hold(&fx.project);
+    let e = s.run("workspace.open", &path_param(&fx.project)).unwrap_err();
+    assert_locked(&e);
+    assert!(leftover.exists(), "a refused open sweeps nothing: another holder may be writing it");
+
+    drop(guard);
+    s.set_lock_wait(LONG);
+    s.run("workspace.open", &path_param(&fx.project)).unwrap();
+    assert!(!leftover.exists(), "the open that holds the lock sweeps the leftover");
+}
+
+// ADR 0007 #6: a command that finds a lock left by a dead holder sweeps, after recovering.
+#[test]
+fn a_mutating_command_that_finds_a_stale_lock_sweeps_leftovers() {
+    let fx = move_fixture();
+    let mut s = session_waiting(&fx, LONG);
+    write_ok(&mut s, &[("pages/first.md", "1")]);
+    let leftover = fx.ws.join("pages/.x.md.1-1.craft_tmp");
+    std::fs::write(&leftover, "half").unwrap();
+    plant_stale(&fx.ws, DEAD);
+
+    write_ok(&mut s, &[("pages/second.md", "2")]);
+    assert!(!leftover.exists(), "the stale lock means a writer died: its leftovers go");
+    assert!(lock_files(&fx.ws).is_empty());
+}
+
 // ---- AT-L0-11-b ----
 
 #[test]

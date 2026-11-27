@@ -194,3 +194,97 @@ fn the_holder_codec_round_trips_and_clips_a_long_command() {
     assert!(!command.is_empty() && "é".repeat(10_000).starts_with(&command), "clipped on a character boundary");
     assert_eq!(parsed.pid, Some(1));
 }
+
+// ---- review round 1: contention between handles ----
+
+const THREADS: usize = 8;
+const ROUNDS: usize = 600;
+
+/// Every thread takes and releases the lock `ROUNDS` times with its own handle. `wait_of` picks
+/// the wait of a thread. Returns the most holders seen at once, the acquisitions, and every error
+/// other than a refusal (`Held`).
+fn contend(project: &std::path::Path, rounds: usize, wait_of: fn(usize) -> Duration) -> (usize, usize, Vec<String>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let (now, max, taken) = (AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0));
+    let errors = std::sync::Mutex::new(Vec::new());
+    let start = std::sync::Barrier::new(THREADS);
+    std::thread::scope(|s| {
+        for t in 0..THREADS {
+            let (now, max, taken, errors, start) = (&now, &max, &taken, &errors, &start);
+            let ws = open_rw(project);
+            s.spawn(move || {
+                let me = holder(1000 + t as u32, "contend");
+                start.wait();
+                for _ in 0..rounds {
+                    match ws.lock(&me, wait_of(t)) {
+                        Ok(guard) => {
+                            taken.fetch_add(1, Ordering::SeqCst);
+                            let inside = now.fetch_add(1, Ordering::SeqCst) + 1;
+                            max.fetch_max(inside, Ordering::SeqCst);
+                            // Stay inside long enough for the others to pile up behind the lock.
+                            std::thread::sleep(Duration::from_micros(200));
+                            now.fetch_sub(1, Ordering::SeqCst);
+                            drop(guard);
+                        }
+                        Err(LockError::Held { .. }) => {}
+                        Err(other) => errors.lock().unwrap().push(format!("{other:?}")),
+                    }
+                }
+            });
+        }
+    });
+    (max.into_inner(), taken.into_inner(), errors.into_inner().unwrap())
+}
+
+// Mutual exclusion: a waiter that gives up must not break the lock another handle holds.
+#[test]
+fn handles_that_give_up_never_let_two_holders_in_at_once() {
+    let dir = TempDir::new();
+    let project = new_project(&dir);
+    let (max, taken, _errors) = contend(&project, 3000, |t| if t % 2 == 0 { Duration::ZERO } else { LONG });
+    assert!(taken > 0, "somebody got the lock");
+    assert!(max <= 1, "{max} handles held the lock at the same moment");
+}
+
+// Mutual exclusion when everyone waits (and the lock files are created and removed all the time).
+#[test]
+fn handles_that_all_wait_take_the_lock_one_at_a_time() {
+    let dir = TempDir::new();
+    let project = new_project(&dir);
+    let (max, taken, errors) = contend(&project, ROUNDS, |_| LONG);
+    assert!(max <= 1, "{max} handles held the lock at the same moment");
+    assert!(errors.is_empty(), "a waiter never fails: {errors:?}");
+    assert_eq!(taken, THREADS * ROUNDS, "every waiter gets its turn");
+}
+
+// First writers on a fresh workspace: `.cache/` appears and disappears between the checks.
+#[test]
+fn first_writers_racing_on_a_fresh_workspace_all_succeed() {
+    for _ in 0..20 {
+        let dir = TempDir::new();
+        let project = new_project(&dir);
+        let ws = open_rw(&project);
+        let _ = std::fs::remove_dir_all(cache(&ws));
+        let start = std::sync::Barrier::new(THREADS);
+        let failures: Vec<String> = std::thread::scope(|s| {
+            let jobs: Vec<_> = (0..THREADS)
+                .map(|t| {
+                    let ws = open_rw(&project);
+                    let start = &start;
+                    s.spawn(move || {
+                        start.wait();
+                        let mut failed = Vec::new();
+                        for _ in 0..25 {
+                            if let Err(e) = ws.lock(&holder(2000 + t as u32, "first"), LONG) {
+                                failed.push(format!("{e:?}"));
+                            }
+                        }
+                        failed
+                    })
+                })
+                .collect();
+            jobs.into_iter().flat_map(|j| j.join().unwrap()).collect()
+        });
+        assert!(failures.is_empty(), "a first writer failed instead of waiting: {failures:?}");
+    }
+}
