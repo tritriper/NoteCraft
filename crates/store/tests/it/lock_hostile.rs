@@ -166,14 +166,17 @@ fn a_lock_file_that_is_a_fifo_gives_io_without_blocking() {
 }
 
 #[test]
-fn a_huge_sparse_lock_file_works_is_never_read_and_is_removed_at_release() {
+fn a_huge_sparse_lock_file_works_is_never_read_or_changed() {
     let f = fx();
     let file = std::fs::File::create(f.ws.join(LOCK_FILE)).unwrap();
     file.set_len(100 << 20).unwrap();
     drop(file);
     let r = try_lock(&f.project);
     assert!(matches!(r, Ok(None)), "{r:?}");
-    assert!(absent(&f.ws.join(LOCK_FILE)));
+    let meta = std::fs::symlink_metadata(f.ws.join(LOCK_FILE)).unwrap();
+    assert!(meta.is_file(), "the lock file is kept");
+    assert_eq!(meta.len(), 100 << 20, "never truncated");
+    assert!(absent(&f.ws.join(LOCK_RECORD)));
 }
 
 #[cfg(unix)]

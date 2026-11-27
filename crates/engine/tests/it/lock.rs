@@ -112,8 +112,15 @@ fn hold(project: &Path) -> WriteLock {
     ws.lock(&Holder { pid: Some(std::process::id()), command: Some("test.holder".into()), started: None }, LONG).unwrap()
 }
 
-fn lock_files(ws: &Path) -> Vec<&'static str> {
-    [".cache/lock", ".cache/lock.json"].into_iter().filter(|p| std::fs::symlink_metadata(ws.join(p)).is_ok()).collect()
+/// Whether the holder record is left. The lock file itself is persistent (ADR 0007 #4): it is
+/// created once and never deleted, so only the record comes and goes.
+fn record_left(ws: &Path) -> bool {
+    std::fs::symlink_metadata(ws.join(".cache/lock.json")).is_ok()
+}
+
+/// `.cache/lock` is a regular file of length 0 (nothing ever writes into it).
+fn lock_file_is_empty(ws: &Path) -> bool {
+    std::fs::symlink_metadata(ws.join(".cache/lock")).map(|m| m.is_file() && m.len() == 0).unwrap_or(false)
 }
 
 fn assert_locked(e: &CmdError) {
@@ -175,7 +182,7 @@ fn at_l0_11_a_a_second_process_waits_then_is_refused_while_a_command_holds_the_l
     let state = content(&fx.ws);
     assert_eq!(state.get("pages/child.md"), Some(&b"from the child".to_vec()));
     assert_eq!(state.get("pages/parent.md"), Some(&b"from the parent".to_vec()));
-    assert!(lock_files(&fx.ws).is_empty(), "no lock file is left behind");
+    assert!(!record_left(&fx.ws), "no lock file is left behind");
 }
 
 #[test]
@@ -202,7 +209,7 @@ fn at_l0_11_a_concurrent_read_change_writes_from_two_processes_lose_nothing() {
         let expect: Vec<String> = (0..50).map(|i| format!("{prefix}{i}")).collect();
         assert_eq!(mine, expect.iter().collect::<Vec<_>>(), "each process's lines keep their order");
     }
-    assert!(lock_files(&fx.ws).is_empty());
+    assert!(!record_left(&fx.ws));
 }
 
 #[test]
@@ -263,7 +270,7 @@ fn many_sessions_in_one_process_lose_no_update() {
     let lines = log_lines(&fx.ws);
     assert_eq!(lines.len(), 100);
     assert_eq!(lines.iter().collect::<BTreeSet<_>>().len(), 100);
-    assert!(lock_files(&fx.ws).is_empty());
+    assert!(!record_left(&fx.ws));
 }
 
 // Reads never lock.
@@ -374,7 +381,7 @@ fn a_mutating_command_that_finds_a_stale_lock_sweeps_leftovers() {
 
     write_ok(&mut s, &[("pages/second.md", "2")]);
     assert!(!leftover.exists(), "the stale lock means a writer died: its leftovers go");
-    assert!(lock_files(&fx.ws).is_empty());
+    assert!(!record_left(&fx.ws));
 }
 
 // ---- AT-L0-11-b ----
@@ -386,7 +393,7 @@ fn at_l0_11_b_a_lock_left_by_a_killed_process_is_detected_and_cleared_on_open() 
     wait_for(&mut child, &ready);
     child.0.kill().unwrap();
     child.0.wait().unwrap();
-    assert!(!lock_files(&fx.ws).is_empty(), "a killed holder leaves a trace");
+    assert!(record_left(&fx.ws), "a killed holder leaves a trace");
 
     let mut s = bare_session();
     s.set_lock_wait(LONG);
@@ -395,11 +402,11 @@ fn at_l0_11_b_a_lock_left_by_a_killed_process_is_detected_and_cleared_on_open() 
     assert!(!stale.is_null(), "the dead holder is reported");
     assert_eq!(stale["pid"], json!(child.id()));
     assert_eq!(stale["command"], json!("test.hold"));
-    assert!(lock_files(&fx.ws).is_empty(), "the stale lock is cleared");
+    assert!(!record_left(&fx.ws), "the stale lock is cleared");
 
     write_ok(&mut s, &[("pages/after.md", "after")]);
     assert!(!fx.ws.join("pages/child.md").exists(), "the killed command never committed");
-    assert!(lock_files(&fx.ws).is_empty());
+    assert!(!record_left(&fx.ws));
 }
 
 /// Plants what a killed holder leaves: an empty lock file and a record.
@@ -426,7 +433,7 @@ fn a_stale_lock_with_a_journal_is_rolled_back_under_the_lock() {
     assert_eq!(opened["staleLock"]["command"], json!("page.move"));
     assert_eq!(opened["recovery"]["state"], json!("rolled_back"));
     assert_eq!(content(&fx.ws), r.before);
-    assert!(lock_files(&fx.ws).is_empty());
+    assert!(!record_left(&fx.ws));
     assert!(journal_files(&fx.ws).is_empty(), "no head and no blob remain");
 }
 
@@ -469,14 +476,14 @@ fn a_mutating_command_clears_a_stale_lock_and_recovers_first() {
     let mut expect = r.before.clone();
     expect.insert("pages/x.md".to_string(), b"x".to_vec());
     assert_eq!(content(&fx.ws), expect, "recovered to the state before, then the command's own change");
-    assert!(lock_files(&fx.ws).is_empty());
+    assert!(!record_left(&fx.ws));
     assert!(journal_files(&fx.ws).is_empty());
 }
 
 // ---- ADR 0007 #4: no residue ----
 
 #[test]
-fn a_released_lock_leaves_no_file_and_a_clean_open_writes_nothing() {
+fn a_released_lock_leaves_no_record_and_a_clean_open_writes_nothing() {
     let fx = move_fixture();
     let cache_before = fx.ws.join(".cache").exists();
     let before = tree(&fx.ws);
@@ -488,7 +495,8 @@ fn a_released_lock_leaves_no_file_and_a_clean_open_writes_nothing() {
 
     let mut s = session_waiting(&fx, LONG);
     let check = |label: &str| {
-        assert!(lock_files(&fx.ws).is_empty(), "{label}: a lock file is left");
+        assert!(!record_left(&fx.ws), "{label}: the record is left");
+        assert!(lock_file_is_empty(&fx.ws), "{label}: `.cache/lock` is not a regular empty file");
         assert_eq!(fx.ws.join(".cache").exists(), cache_before, "{label}: `.cache/` appeared or vanished");
     };
     write_ok(&mut s, &[("pages/one.md", "1")]);
@@ -518,7 +526,7 @@ fn what_else_lives_in_cache_survives_a_command_and_an_open() {
     write_ok(&mut s, &[("pages/one.md", "1")]);
     s.run("workspace.open", &path_param(&fx.project)).unwrap();
     assert_eq!(std::fs::read(fx.ws.join(".cache/other")).unwrap(), b"mine");
-    assert!(lock_files(&fx.ws).is_empty());
+    assert!(!record_left(&fx.ws));
 }
 
 // ---- hostile lock paths, through the engine ----

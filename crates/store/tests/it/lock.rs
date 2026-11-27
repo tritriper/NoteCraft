@@ -121,36 +121,53 @@ fn a_record_naming_a_live_pid_is_still_stale() {
     assert_eq!(guard.stale(), Some(&alive));
 }
 
-// ADR 0007 #4: what a release leaves.
+// ADR 0007 #4 (amended): the empty lock file stays, the record goes.
 #[test]
-fn a_released_lock_leaves_no_file_and_keeps_what_was_there() {
-    // `.cache/` absent: the acquisition creates it and the release removes it again.
+fn a_released_lock_keeps_only_the_empty_lock_file_and_what_was_there() {
+    let lock_file_is_empty =
+        |ws: &Workspace| std::fs::symlink_metadata(ws.dir().join(LOCK_FILE)).map(|m| m.is_file() && m.len() == 0).unwrap_or(false);
+
+    // `.cache/` absent (a fresh clone): the acquisition creates it, and it stays.
     let dir = TempDir::new();
     let project = new_project(&dir);
     let ws = open_rw(&project);
     let _ = std::fs::remove_dir_all(cache(&ws));
-    let before = tree(ws.dir());
     let guard = ws.lock(&holder(1, "a"), LONG).unwrap();
     assert!(!absent(&ws.dir().join(LOCK_FILE)), "the lock file exists while held");
     assert!(!absent(&ws.dir().join(LOCK_RECORD)), "the record exists while held");
     drop(guard);
-    assert!(absent(&ws.dir().join(LOCK_FILE)));
-    assert!(absent(&ws.dir().join(LOCK_RECORD)));
-    assert_eq!(tree(ws.dir()), before, "the tree is as it was, `.cache/` included");
+    assert!(absent(&ws.dir().join(LOCK_RECORD)), "the record goes");
+    assert!(lock_file_is_empty(&ws), "the lock file stays, empty");
+    assert!(cache(&ws).is_dir(), "`.cache/` stays");
     assert_eq!(ws.holder(), None);
 
-    // `.cache/` present and empty: it stays.
-    std::fs::create_dir_all(cache(&ws)).unwrap();
+    // A second cycle leaves the tree identical to the first, mtimes included.
+    let first = tree(ws.dir());
     drop(ws.lock(&holder(1, "a"), LONG).unwrap());
-    assert!(cache(&ws).is_dir(), "a folder this acquisition did not create is not removed");
-    assert!(absent(&ws.dir().join(LOCK_FILE)));
+    assert_eq!(tree(ws.dir()), first);
 
     // Something else in `.cache/`: it stays, and so do the other files.
     std::fs::write(cache(&ws).join("other"), "mine").unwrap();
     drop(ws.lock(&holder(1, "a"), LONG).unwrap());
     assert_eq!(std::fs::read(cache(&ws).join("other")).unwrap(), b"mine");
-    assert!(absent(&ws.dir().join(LOCK_FILE)));
+    assert!(lock_file_is_empty(&ws));
     assert!(absent(&ws.dir().join(LOCK_RECORD)));
+}
+
+// ADR 0007 #4 (amended), AT-L0-03-d: `create` makes the empty lock file, so the first open of a
+// fresh workspace does not make `.cache/` appear.
+#[test]
+fn create_makes_the_empty_lock_file() {
+    let dir = TempDir::new();
+    let project = new_project(&dir);
+    let ws = open_rw(&project);
+    let meta = std::fs::symlink_metadata(ws.dir().join(LOCK_FILE)).unwrap();
+    assert!(meta.is_file(), "a regular file");
+    assert_eq!(meta.len(), 0, "empty");
+    assert!(absent(&ws.dir().join(LOCK_RECORD)), "no record");
+    let before = tree(ws.dir());
+    drop(ws.lock(&holder(1, "a"), LONG).unwrap());
+    assert_eq!(tree(ws.dir()), before, "a lock/release cycle changes nothing, mtimes included");
 }
 
 // Stale record + release: the cleared record does not come back as stale.
