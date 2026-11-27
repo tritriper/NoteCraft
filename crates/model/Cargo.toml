@@ -9,3 +9,10 @@ description = "NoteCraft data model: workspaces, pages, blocks, databases, prope
 
 [lints]
 workspace = true
+
+[dependencies]
+getrandom = { workspace = true }
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { workspace = true, features = ["wasm_js"] }
+js-sys = { workspace = true }

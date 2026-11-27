@@ -29,6 +29,10 @@ notecraft-ui-egui = { path = "crates/ui-egui" }
 # external (tooling and the engine)
 serde_json = "1"
 
+# external (model: ids)
+getrandom = { version = "0.4", default-features = false }
+js-sys = "0.3"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
