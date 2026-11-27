@@ -1,6 +1,6 @@
 # ADR 0006 — Multi-file commits: an undo journal in `.cache/journal/`, recovery on open
 
-- **Status:** proposed (US-L0-10)
+- **Status:** accepted (US-L0-10)
 - **Date:** 2026-11-27
 - **Story:** US-L0-10, atomic multi-file transactions and crash recovery (F-CMD-10; ENF-03,
   ENF-12)

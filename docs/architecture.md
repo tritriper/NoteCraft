@@ -72,7 +72,7 @@ path inside the workspace and writes it atomically with craft-libs' `craft-atomi
 set automation roots; a path outside them is `outside_roots`. Crates below L5 cannot reach the
 network: `cargo xtask layers` and `cargo xtask lints` check it.
 
-### Crash safety ([ADR 0006](adr/0006-multi-file-commit-journal.md), US-L0-10, in progress)
+### Crash safety ([ADR 0006](adr/0006-multi-file-commit-journal.md), US-L0-10)
 
 Each file is replaced atomically, so one file is always old or new. A command that changes two or
 more files also keeps an undo journal in the workspace's `.cache/journal/`, which `.gitignore`

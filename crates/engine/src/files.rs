@@ -26,6 +26,11 @@ pub trait Files {
     fn write(&mut self, path: &str, bytes: &[u8]) -> Result<(), FileError>;
     /// Removes a file; removing an absent file is not an error.
     fn remove(&mut self, path: &str) -> Result<(), FileError>;
+    /// Whether multi-file commits through this port keep the recovery journal under
+    /// `.cache/journal/` (ADR 0006 #9). Default `false`: rolled back in memory, not crash-safe.
+    fn journaled(&self) -> bool {
+        false
+    }
 }
 
 /// `Files` over an open store workspace (ADR 0005 #2). Every path goes through `RelPath::parse`
@@ -62,5 +67,9 @@ impl Files for DiskFiles {
 
     fn remove(&mut self, path: &str) -> Result<(), FileError> {
         self.0.remove(&rel(path)?).map_err(|e| file_error(path, &e))
+    }
+
+    fn journaled(&self) -> bool {
+        true
     }
 }
