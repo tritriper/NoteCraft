@@ -3,7 +3,7 @@
 > **Last reviewed:** 2026-11-25 · **Last updated:** 2026-11-27 · **Change:** minor (workspace on disk: design, ADR 0005)
 
 How NoteCraft is built. At this stage (lot L0) the engine has the session, undo and the
-command registry, and the model has stable ids; the other crates are still empty. The behaviour spec is being written in a separate spec repository; once the lead tech
+command registry, and the model has stable ids; the store has the workspace on disk. The behaviour spec is being written in a separate spec repository; once the lead tech
 settles the architecture from it, this file becomes the committed, current summary (the longer
 working notes stay in the gitignored `plan/architecture.md`). Rules for working in the code are
 in [`AGENTS.md`](../AGENTS.md); decisions are in [`adr/`](adr/).

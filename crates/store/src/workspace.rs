@@ -152,7 +152,18 @@ impl Workspace {
     pub fn read(&self, path: &RelPath) -> Result<Option<Vec<u8>>, StoreError> {
         let full = self.confined(path)?;
         match fs::metadata(&full) {
-            Ok(m) if m.is_file() => fs::read(&full).map(Some).map_err(|e| io_error(&full, &e)),
+            Ok(m) if m.is_file() => {
+                if m.len() > MANIFEST_MAX_BYTES {
+                    return Err(StoreError::Io { path: path.as_str().to_string(), message: "file too large".to_string() });
+                }
+                let mut bytes = Vec::new();
+                let file = fs::File::open(&full).map_err(|e| io_error(&full, &e))?;
+                file.take(MANIFEST_MAX_BYTES + 1).read_to_end(&mut bytes).map_err(|e| io_error(&full, &e))?;
+                if bytes.len() as u64 > MANIFEST_MAX_BYTES {
+                    return Err(StoreError::Io { path: path.as_str().to_string(), message: "file too large".to_string() });
+                }
+                Ok(Some(bytes))
+            }
             Ok(_) => Err(StoreError::Io { path: path.as_str().to_string(), message: "not a regular file".to_string() }),
             Err(e) if is_absent(&e) => Ok(None),
             Err(e) => Err(io_error(&full, &e)),

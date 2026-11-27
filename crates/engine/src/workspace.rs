@@ -59,6 +59,8 @@ fn check_roots(session: &Session, project: &Project, create: bool) -> Result<(),
     let folder = project.workspace_dir();
     confine(&folder, roots.read())?;
     if create {
+        // `create` also writes in the project folder (staging folder, rename).
+        confine(project.dir(), roots.write())?;
         confine(&folder, roots.write())?;
     }
     Ok(())
@@ -89,8 +91,9 @@ fn create(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
     let model = Model { id, name, created: format_created(id.timestamp_ms()), settings: Settings::default() };
     let workspace = Workspace::create(&project, model).map_err(store_error)?;
     let writable = writable(session, workspace.dir());
+    let path = lossy(workspace.dir());
     session.install(Some(Opened { workspace, writable }));
-    Ok(json!({ "workspace": id.to_string(), "path": lossy(&project.workspace_dir()) }))
+    Ok(json!({ "workspace": id.to_string(), "path": path }))
 }
 
 fn open(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
