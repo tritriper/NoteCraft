@@ -10,6 +10,7 @@ use crate::error::{CorruptReason, ManifestError, PathError, StoreError, clip};
 use crate::manifest::{FormatCheck, MANIFEST_MAX_BYTES, Manifest};
 use crate::path::RelPath;
 use crate::project::Project;
+use crate::sweep::{self, Swept};
 
 /// The manifest's file name.
 pub const MANIFEST: &str = "workspace.json";
@@ -35,6 +36,8 @@ pub enum OpenMode {
 pub enum ReadOnlyReason {
     Requested,
     NewerFormat,
+    /// Recovery of an interrupted commit was refused (ADR 0006 #6).
+    Recovery,
 }
 
 impl ReadOnlyReason {
@@ -42,6 +45,7 @@ impl ReadOnlyReason {
         match self {
             ReadOnlyReason::Requested => "requested",
             ReadOnlyReason::NewerFormat => "newer_format",
+            ReadOnlyReason::Recovery => "recovery",
         }
     }
 }
@@ -93,6 +97,7 @@ impl Workspace {
         let target = project.workspace_dir();
         let replace_empty = check_target(&target)?;
         let manifest = Manifest::new(workspace);
+        sweep::remove_staging(dir);
         let staging = dir.join(format!(".notecraft-new.{}.craft_tmp", manifest.workspace.id));
         fs::create_dir(&staging).map_err(|e| io_error(&staging, &e))?;
         let built = build(&staging, &manifest).and_then(|()| {
@@ -148,6 +153,19 @@ impl Workspace {
         self.read_only
     }
 
+    /// The same workspace, refusing writes for `reason`.
+    pub fn with_read_only(self, reason: ReadOnlyReason) -> Workspace {
+        Workspace { read_only: Some(reason), ..self }
+    }
+
+    /// Removes crash leftovers (ADR 0006 #10). Best effort: a failure on one entry is skipped.
+    pub fn sweep(&self) -> Result<Swept, StoreError> {
+        if self.read_only.is_some() {
+            return Err(StoreError::ReadOnly { path: shown(&self.dir) });
+        }
+        Ok(sweep::sweep(&self.dir))
+    }
+
     /// The bytes of a file, or `None` when it does not exist.
     pub fn read(&self, path: &RelPath) -> Result<Option<Vec<u8>>, StoreError> {
         let full = self.confined(path)?;
@@ -185,7 +203,13 @@ impl Workspace {
         self.writable(path)?;
         let full = self.confined(path)?;
         match fs::remove_file(&full) {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                // Best effort: flush the folder so the removal survives a power cut (ADR 0006 #11).
+                if let Some(parent) = full.parent() {
+                    let _ = craft_atomic::AtomicFs::sync_dir(&craft_atomic::RealFs, parent);
+                }
+                Ok(())
+            }
             Err(e) if is_absent(&e) => Ok(()),
             Err(e) => Err(io_error(&full, &e)),
         }

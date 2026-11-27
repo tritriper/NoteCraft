@@ -29,6 +29,7 @@ notecraft-ui-egui = { path = "crates/ui-egui" }
 # external (tooling, the engine and the store)
 serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+sha2 = { version = "0.10", default-features = false }
 
 # craft-libs: every crate at one rev, merged on craft-libs main (shared rule 10)
 craft-atomic = { git = "https://github.com/storytold/craft-libs", rev = "110d4a794a899a562293a6e16c5645d908753da5", version = "=0.1.0" }
