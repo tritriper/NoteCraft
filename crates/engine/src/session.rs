@@ -4,7 +4,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Duration;
 
 use notecraft_model::IdGen;
-use notecraft_store::{JOURNAL_HEAD, WriteLock, is_reserved};
+use notecraft_store::{JOURNAL_HEAD, LockError, ReadOnlyReason, WriteLock, is_reserved};
 use serde_json::{Map, Value, json};
 
 use crate::ctx::{Ctx, Staged, no_workspace};
@@ -12,7 +12,7 @@ use crate::error::{CmdError, CmdResult, ErrorCode};
 use crate::files::{DiskFiles, Files};
 use crate::history::{Change, History, Step};
 use crate::journal::{BuildError, Planned, Recovery, arm, build, clear, recover, remove_blobs};
-use crate::lock::{LOCK_WAIT, lock_error, me};
+use crate::lock::{LOCK_WAIT, Process, lock_error, me};
 use crate::registry::{Handler, Registry};
 use crate::roots::{Roots, outside};
 use crate::workspace::{self, Opened};
@@ -32,6 +32,8 @@ pub struct Session {
     recovery_pending: bool,
     /// How long a mutating command waits for another writer (ADR 0007 #8).
     lock_wait: Duration,
+    /// Which kind of process this is, for the lock record (ADR 0008 #9).
+    process: Process,
 }
 
 impl Session {
@@ -47,6 +49,7 @@ impl Session {
             writable: true,
             recovery_pending: false,
             lock_wait: LOCK_WAIT,
+            process: Process::default(),
         }
     }
 
@@ -64,8 +67,23 @@ impl Session {
         self.lock_wait = wait;
     }
 
-    pub(crate) fn lock_wait(&self) -> Duration {
-        self.lock_wait
+    /// Names this process in the lock record: `App` (the default), `Cli` or `Mcp`.
+    pub fn set_process(&mut self, process: Process) {
+        self.process = process;
+    }
+
+    pub(crate) fn process(&self) -> Process {
+        self.process
+    }
+
+    /// Makes the open workspace read-only for `reason`, files included (a lock the file system
+    /// cannot give, ADR 0008 #10). The history stays.
+    fn go_read_only(&mut self, reason: ReadOnlyReason) {
+        if let Some(ws) = self.workspace.take() {
+            let ws = ws.with_read_only(reason);
+            self.files = Some(Box::new(DiskFiles(ws.clone())));
+            self.workspace = Some(ws);
+        }
     }
 
     /// Whether a workspace was opened or created (not set by `with_files`).
@@ -112,8 +130,13 @@ impl Session {
     fn write_gate(&self) -> Result<(), CmdError> {
         let Some(ws) = &self.workspace else { return Ok(()) };
         if let Some(reason) = ws.read_only() {
-            return Err(CmdError::new(ErrorCode::ReadOnly, format!("the workspace is read-only ({})", reason.as_str().replace('_', " ")))
-                .with_detail("reason", reason.as_str()));
+            let label = match reason {
+                ReadOnlyReason::Requested => "opened read-only",
+                ReadOnlyReason::NewerFormat => "newer format",
+                ReadOnlyReason::Recovery => "recovery needed",
+                ReadOnlyReason::NoLock => "no file locks",
+            };
+            return Err(CmdError::new(ErrorCode::ReadOnly, format!("the workspace is read-only ({label})")).with_detail("reason", reason.as_str()));
         }
         if !self.writable {
             return Err(outside(ws.dir()));
@@ -154,7 +177,7 @@ impl Session {
         match spec.run {
             Handler::Apply(handler) => {
                 // Held until the step is recorded (ADR 0007 #1); released on any return or panic.
-                let _guard = if spec.mutates { self.locked(id)? } else { None };
+                let _guard = if spec.mutates { self.locked()? } else { None };
                 let empty = Map::new();
                 let map = params.as_object().unwrap_or(&empty);
                 let outcome = catch_unwind(AssertUnwindSafe(|| {
@@ -182,10 +205,19 @@ impl Session {
 
     /// Takes the write lock for command `id` (none when no workspace is open), then recovers
     /// under it, and sweeps when the previous holder died without releasing (ADR 0007 #6, #7).
-    fn locked(&mut self, id: &str) -> Result<Option<WriteLock>, CmdError> {
-        let guard = match &self.workspace {
-            Some(ws) => Some(ws.lock(&me(id), self.lock_wait).map_err(lock_error)?),
-            None => None,
+    fn locked(&mut self) -> Result<Option<WriteLock>, CmdError> {
+        let taken = match &self.workspace {
+            Some(ws) => ws.lock(&me(self.process), self.lock_wait).map(Some),
+            None => Ok(None),
+        };
+        let guard = match taken {
+            Ok(g) => g,
+            Err(e) => {
+                if e == LockError::Unsupported {
+                    self.go_read_only(ReadOnlyReason::NoLock);
+                }
+                return Err(lock_error(e));
+            }
         };
         self.recover_pending(guard.is_some())?;
         if let (Some(g), Some(ws)) = (&guard, &self.workspace)
@@ -216,7 +248,7 @@ impl Session {
 
     /// Undo (`undo` true) or redo the newest step, if every file still holds what it left.
     fn travel(&mut self, undo: bool) -> CmdResult {
-        let _guard = self.locked(if undo { "edit.undo" } else { "edit.redo" })?;
+        let _guard = self.locked()?;
         let files = self.files.as_deref().ok_or_else(no_workspace)?;
         let stack = if undo { &self.history.undo } else { &self.history.redo };
         let step = stack.back().ok_or_else(|| {

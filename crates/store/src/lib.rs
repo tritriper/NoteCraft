@@ -22,8 +22,8 @@ pub use count::Counts;
 pub use error::{CorruptReason, ManifestError, PathError, StoreError};
 pub use format::{FORMAT_FAMILY, FORMAT_VERSION};
 pub use journal::{
-    JOURNAL_DIR, JOURNAL_FAMILY, JOURNAL_HEAD, JOURNAL_MAX_BYTES, JOURNAL_MAX_ENTRIES, Journal, JournalEntry, JournalError, digest, is_reserved,
-    journal_blob,
+    JOURNAL_DIR, JOURNAL_FAMILY, JOURNAL_HEAD, JOURNAL_MAX_BYTES, JOURNAL_MAX_ENTRIES, Journal, JournalEntry, JournalError, LOCAL_DIR, digest,
+    is_reserved, journal_blob,
 };
 pub use lock::{Holder, LOCK_FILE, LOCK_RECORD, LOCK_RECORD_MAX_BYTES, LockError, WriteLock};
 pub use manifest::{FormatCheck, MANIFEST_MAX_BYTES, Manifest, format_created};

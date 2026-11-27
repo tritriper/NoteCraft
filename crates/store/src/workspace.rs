@@ -18,7 +18,7 @@ use crate::sweep::{self, Swept};
 /// The manifest's file name.
 pub const MANIFEST: &str = "workspace.json";
 
-const GITIGNORE: &str = ".cache/\n";
+const GITIGNORE: &str = ".cache/\n.local/\n";
 const GITATTRIBUTES: &str = "*.md text eol=lf\n*.json text eol=lf\n";
 /// Folders `create` makes. Git keeps no empty folders, so `open` tolerates any of them missing.
 const FOLDERS: [&str; 2] = ["pages", "attachments"];
@@ -37,14 +37,17 @@ pub enum ReadOnlyReason {
     NewerFormat,
     /// Recovery of an interrupted commit was refused (ADR 0006 #6).
     Recovery,
+    /// The file system gives no lock (or `.local/lock` cannot be made): ADR 0008 #10.
+    NoLock,
 }
 
 impl ReadOnlyReason {
     pub fn as_str(self) -> &'static str {
         match self {
             ReadOnlyReason::Requested => "requested",
-            ReadOnlyReason::NewerFormat => "newer_format",
+            ReadOnlyReason::NewerFormat => "newerFormat",
             ReadOnlyReason::Recovery => "recovery",
+            ReadOnlyReason::NoLock => "noLock",
         }
     }
 }
@@ -329,9 +332,9 @@ fn build(staging: &Path, manifest: &Manifest) -> Result<(), StoreError> {
         fs::create_dir(&path).map_err(|e| io_error(&path, &e))?;
     }
     // The persistent, empty lock file (ADR 0007 #4): created once, never deleted.
-    let cache = staging.join(".cache");
-    fs::create_dir(&cache).map_err(|e| io_error(&cache, &e))?;
-    let lock = cache.join("lock");
+    let local = staging.join(".local");
+    fs::create_dir(&local).map_err(|e| io_error(&local, &e))?;
+    let lock = local.join("lock");
     craft_atomic::write_new(&lock, &[]).map_err(|e| io_error(&lock, &e))?;
     Ok(())
 }

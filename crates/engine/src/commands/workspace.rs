@@ -48,7 +48,7 @@ fn info(ctx: &mut Ctx<'_>, _params: &Map<String, Value>) -> CmdResult {
     let manifest = ws.manifest();
     let counts = ws.count_items();
     let reason = ws.read_only().map(|r| r.as_str());
-    Ok(json!({
+    let mut out = json!({
         "workspace": manifest.workspace.id.to_string(),
         "name": ws.name(),
         "path": ws.project_dir().to_string_lossy(),
@@ -56,9 +56,12 @@ fn info(ctx: &mut Ctx<'_>, _params: &Map<String, Value>) -> CmdResult {
         "databases": counts.map(|c| c.databases),
         "rows": counts.map(|c| c.rows),
         "readOnly": reason.is_some(),
-        "readOnlyReason": reason,
         "format": manifest.format,
-    }))
+    });
+    if let (Some(reason), Some(map)) = (reason, out.as_object_mut()) {
+        map.insert("readOnlyReason".to_string(), json!(reason));
+    }
+    Ok(out)
 }
 
 pub(crate) fn specs() -> [CommandSpec; 4] {

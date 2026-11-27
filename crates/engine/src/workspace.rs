@@ -2,15 +2,18 @@
 //! full, then the session swaps it in. A failure leaves the previous workspace as it was.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use notecraft_model::{GenError, Settings, Workspace as Model};
-use notecraft_store::{CorruptReason, JOURNAL_HEAD, Journal, OpenMode, Project, ReadOnlyReason, RelPath, StoreError, Workspace, format_created};
+use notecraft_store::{
+    CorruptReason, JOURNAL_HEAD, Journal, LockError, OpenMode, Project, ReadOnlyReason, RelPath, StoreError, Workspace, format_created,
+};
 use serde_json::{Map, Value, json};
 
 use crate::error::{CmdError, CmdResult, ErrorCode};
 use crate::files::DiskFiles;
 use crate::journal::{Recovery, recover};
-use crate::lock::{holder_json, lock_error, me};
+use crate::lock::me;
 use crate::registry::Lifecycle;
 use crate::roots::{Roots, confine};
 use crate::session::Session;
@@ -83,8 +86,9 @@ fn id_error(e: GenError) -> CmdError {
 
 fn create(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
     let dir = project_dir(params)?;
+    // A blank name is an absent one; any other is stored trimmed (AT-L0-03-h).
     let name = match params.get("name").and_then(Value::as_str) {
-        Some(n) if n.trim().is_empty() => return Err(invalid("name", "name: the workspace name is empty")),
+        Some(n) if n.trim().is_empty() => None,
         Some(n) => Some(n.trim().to_string()),
         None => None,
     };
@@ -114,50 +118,63 @@ fn open(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
     let mut workspace = Workspace::open(&project, mode).map_err(store_error)?;
     let writable = writable(session, workspace.dir());
     let mut recovery = Value::Null;
-    let mut stale_lock = Value::Null;
+    let mut stale_lock = false;
+    let mut may_recover = false;
     if workspace.read_only().is_none() && writable {
-        // The lock comes first: recovery and the sweep run only while it is held (ADR 0007 #7).
-        let guard = workspace.lock(&me("workspace.open"), session.lock_wait()).map_err(lock_error)?;
-        stale_lock = guard.stale().map_or(Value::Null, holder_json);
-        // Roll back an interrupted multi-file command before anything else (ADR 0006 #6).
-        let mut files = DiskFiles(workspace.clone());
-        match recover(&mut files) {
-            Recovery::Nothing => {
-                sweep(session.roots(), &workspace);
+        // One try, no wait (ADR 0008 #10). The lock comes first: recovery and the sweep run only
+        // while it is held (ADR 0007 #7). A busy lock means a live writer whose journal is its
+        // own: the workspace opens read-write and the next command recovers under the lock.
+        match workspace.lock(&me(session.process()), Duration::ZERO) {
+            Ok(guard) => {
+                may_recover = true;
+                stale_lock = guard.stale().is_some();
+                // Roll back an interrupted multi-file command before anything else (ADR 0006 #6).
+                let mut files = DiskFiles(workspace.clone());
+                match recover(&mut files) {
+                    Recovery::Nothing => {
+                        sweep(session.roots(), &workspace);
+                    }
+                    Recovery::RolledBack { command, restored } => {
+                        recovery = json!({ "state": "rolled_back", "command": command, "restored": restored });
+                        sweep(session.roots(), &workspace);
+                    }
+                    Recovery::Refused(r) => {
+                        recovery = json!({
+                            "state": "refused",
+                            "reason": r.reason,
+                            "command": r.command,
+                            "paths": r.paths,
+                            "message": r.message,
+                        });
+                        workspace = workspace.with_read_only(ReadOnlyReason::Recovery);
+                    }
+                }
+                drop(guard);
             }
-            Recovery::RolledBack { command, restored } => {
-                recovery = json!({ "state": "rolled_back", "command": command, "restored": restored });
-                sweep(session.roots(), &workspace);
-            }
-            Recovery::Refused(r) => {
-                recovery = json!({
-                    "state": "refused",
-                    "reason": r.reason,
-                    "command": r.command,
-                    "paths": r.paths,
-                    "message": r.message,
-                });
-                workspace = workspace.with_read_only(ReadOnlyReason::Recovery);
-            }
+            Err(LockError::Held { .. }) => may_recover = true,
+            // No locks, or no lock file can be made: read-only, nothing written (AT-L0-11-d).
+            Err(_) => workspace = workspace.with_read_only(ReadOnlyReason::NoLock),
         }
-        drop(guard);
-    } else if let Some(command) = pending_head(&workspace) {
+    }
+    if !may_recover && let Some(command) = pending_head(&workspace) {
         recovery = json!({ "state": "pending", "command": command });
     }
     let manifest = workspace.manifest();
     let reason = workspace.read_only().map(|r| r.as_str());
-    let result = json!({
+    let mut result = json!({
         "workspace": manifest.workspace.id.to_string(),
         "name": workspace.name(),
         "path": lossy(workspace.project_dir()),
         "readOnly": reason.is_some(),
-        "readOnlyReason": reason,
         "notice": manifest.notice,
         "format": manifest.format,
         "conflicts": [],
         "recovery": recovery,
         "staleLock": stale_lock,
     });
+    if let (Some(reason), Some(map)) = (reason, result.as_object_mut()) {
+        map.insert("readOnlyReason".to_string(), json!(reason));
+    }
     session.install(Some(Opened { workspace, writable }));
     Ok(result)
 }
@@ -223,7 +240,7 @@ mod tests {
         let _ = std::fs::write(ws.join("workspace.json"), manifest);
         let mut session = Session::new(Registry::builtin());
         let opened = session.run("workspace.open", &json!({ "path": dir.to_string_lossy() }));
-        assert_eq!(opened.as_ref().map(|v| v["readOnlyReason"].clone()).ok(), Some(json!("newer_format")));
+        assert_eq!(opened.as_ref().map(|v| v["readOnlyReason"].clone()).ok(), Some(json!("newerFormat")));
         assert!(session.read_only());
         let undo = session.run("edit.undo", &json!({}));
         assert_eq!(undo.as_ref().err().map(|e| e.code), Some(ErrorCode::ReadOnly));

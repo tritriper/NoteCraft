@@ -26,7 +26,7 @@ pub use ctx::Ctx;
 pub use error::{CmdError, CmdResult, ErrorCode};
 pub use files::{FileError, Files};
 pub use history::UNDO_LIMIT;
-pub use lock::LOCK_WAIT;
+pub use lock::{LOCK_WAIT, Process};
 pub use registry::{CommandInfo, CommandSpec, Handler, Lifecycle, Registry};
 pub use roots::Roots;
 pub use schema::{Field, Kind, ParamsSchema};
