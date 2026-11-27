@@ -38,9 +38,7 @@ pub const ROWS: &[Row] = &[
         mode: "all",
         lot: "L0",
         summary: "One engine for app, CLI and MCP, guarded by a workspace lock",
-        // US-L0-11 (the workspace lock) puts `workspace.open` back here (ADR 0005, consequences):
-        // until then the row must not show as covered.
-        commands: &[],
+        commands: &["workspace.open"],
     },
 ];
 
@@ -59,6 +57,6 @@ mod tests {
         assert!(c.contains(&("F-CMD-02", true)));
         assert!(c.contains(&("F-WS-01", true)));
         assert!(c.contains(&("F-WS-02", true)));
-        assert!(c.contains(&("F-CMD-11", false)));
+        assert!(c.contains(&("F-CMD-11", true)));
     }
 }

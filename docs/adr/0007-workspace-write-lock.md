@@ -1,6 +1,6 @@
 # ADR 0007 — One writer at a time: an OS lock per command in `.cache/lock`, stale holders recovered
 
-- **Status:** proposed (US-L0-11)
+- **Status:** accepted (US-L0-11)
 - **Date:** 2026-11-27
 - **Story:** US-L0-11, workspace lock and single engine (F-CMD-11; ENF-03)
 

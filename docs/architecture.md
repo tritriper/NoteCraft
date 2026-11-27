@@ -87,6 +87,19 @@ never overwrites a file that changed outside NoteCraft since the crash. When it 
 safely, the workspace opens read-only and says why. Opening also removes the temporary files and
 staging folders that a crash leaves behind. Commands cannot write inside `.cache/`.
 
+## One writer at a time
+
+Every mutating command, undo and redo take a lock on `notecraft/.cache/lock` for the length of one
+command ([ADR 0007](adr/0007-workspace-write-lock.md), US-L0-11). It is an operating-system lock
+taken through the standard library, so it is dropped when its process dies, however it dies. The app,
+the CLI and the MCP server therefore serialise their writes, including the read inside a
+read-change-write. A second writer waits a bounded time (`Session::set_lock_wait`, 5 s by default),
+then the command fails with `disabled` and reason `locked`, naming the holder from the advisory record
+`.cache/lock.json`. A record found when the lock is taken means the last holder died: `workspace.open`
+reports it as `staleLock`, and recovery and the sweep run only while the lock is held. Reads never lock.
+A released lock leaves no file behind. Where the file system has no locks, writes are refused and a
+read-only open still works.
+
 ## Testing and gates
 
 `cargo xtask ci` runs `fmt`, `clippy -D warnings`, `test`, `assets`, `layers`, `lints` and `wasm`;

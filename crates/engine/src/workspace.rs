@@ -10,8 +10,9 @@ use serde_json::{Map, Value, json};
 use crate::error::{CmdError, CmdResult, ErrorCode};
 use crate::files::DiskFiles;
 use crate::journal::{Recovery, recover};
+use crate::lock::{holder_json, lock_error, me};
 use crate::registry::Lifecycle;
-use crate::roots::confine;
+use crate::roots::{Roots, confine};
 use crate::session::Session;
 
 /// A workspace ready to become the session's.
@@ -113,21 +114,20 @@ fn open(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
     let mut workspace = Workspace::open(&project, mode).map_err(store_error)?;
     let writable = writable(session, workspace.dir());
     let mut recovery = Value::Null;
-    // Staging folders live in the project folder: sweep them only when it is inside the write root.
-    let project_writable = session.roots().is_none_or(|r| confine(workspace.project_dir(), r.write()).is_ok());
-    let sweep = |w: &Workspace| {
-        let _ = if project_writable { w.sweep() } else { w.sweep_workspace() };
-    };
+    let mut stale_lock = Value::Null;
     if workspace.read_only().is_none() && writable {
+        // The lock comes first: recovery and the sweep run only while it is held (ADR 0007 #7).
+        let guard = workspace.lock(&me("workspace.open"), session.lock_wait()).map_err(lock_error)?;
+        stale_lock = guard.stale().map_or(Value::Null, holder_json);
         // Roll back an interrupted multi-file command before anything else (ADR 0006 #6).
         let mut files = DiskFiles(workspace.clone());
         match recover(&mut files) {
             Recovery::Nothing => {
-                sweep(&workspace);
+                sweep(session.roots(), &workspace);
             }
             Recovery::RolledBack { command, restored } => {
                 recovery = json!({ "state": "rolled_back", "command": command, "restored": restored });
-                sweep(&workspace);
+                sweep(session.roots(), &workspace);
             }
             Recovery::Refused(r) => {
                 recovery = json!({
@@ -140,6 +140,7 @@ fn open(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
                 workspace = workspace.with_read_only(ReadOnlyReason::Recovery);
             }
         }
+        drop(guard);
     } else if let Some(command) = pending_head(&workspace) {
         recovery = json!({ "state": "pending", "command": command });
     }
@@ -155,9 +156,17 @@ fn open(session: &mut Session, params: &Map<String, Value>) -> CmdResult {
         "format": manifest.format,
         "conflicts": [],
         "recovery": recovery,
+        "staleLock": stale_lock,
     });
     session.install(Some(Opened { workspace, writable }));
     Ok(result)
+}
+
+/// Removes crash leftovers. Staging folders live in the project folder: it is swept only when
+/// it is inside the write root.
+pub(crate) fn sweep(roots: Option<&Roots>, w: &Workspace) {
+    let project_writable = roots.is_none_or(|r| confine(w.project_dir(), r.write()).is_ok());
+    let _ = if project_writable { w.sweep() } else { w.sweep_workspace() };
 }
 
 /// For a handle that may not write: `Some(command)` when a journal head exists (the command is

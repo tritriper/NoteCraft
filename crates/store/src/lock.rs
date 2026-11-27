@@ -117,21 +117,17 @@ impl Drop for WriteLock {
         if self.wrote_record {
             let _ = fs::remove_file(&self.record_path);
         }
-        let file = self.file.take();
+        // Unix: unlink before unlock, so a waiter that wakes on the unlinked file starts again.
+        // Windows: unlock and close, then delete (a sharing violation is harmless).
         #[cfg(not(windows))]
-        {
-            // Unlink before unlock: a waiter that wakes on the unlinked file starts again.
-            let _ = fs::remove_file(&self.lock_path);
-            drop(file);
-        }
+        let _ = fs::remove_file(&self.lock_path);
         #[cfg(windows)]
-        {
-            if let Some(f) = file {
-                let _ = f.unlock();
-                drop(f);
-            }
-            let _ = fs::remove_file(&self.lock_path);
+        if let Some(f) = &self.file {
+            let _ = f.unlock();
         }
+        self.file = None;
+        #[cfg(windows)]
+        let _ = fs::remove_file(&self.lock_path);
         if self.created_cache {
             let _ = fs::remove_dir(&self.cache_path);
         }
@@ -187,7 +183,10 @@ mod native {
     use crate::path::RelPath;
     use crate::workspace::Workspace;
 
-    const MAX_IDENTITY_RETRIES: u32 = 16;
+    /// Each retry needs another process to have released the lock, so this only stops a runaway.
+    const MAX_IDENTITY_RETRIES: u32 = 100_000;
+    /// After this many retries, a wait that has run out gives `Held` instead of trying again.
+    const SOFT_RETRIES: u32 = 16;
     const MAX_WAIT: Duration = Duration::from_secs(3600);
 
     fn io_err(path: &Path, e: impl ToString) -> LockError {
@@ -202,7 +201,14 @@ mod native {
     const ENOLCK: i32 = 77;
     #[cfg(all(
         unix,
-        not(any(target_os = "macos", target_os = "ios", target_os = "freebsd", target_os = "netbsd", target_os = "openbsd", target_os = "dragonfly"))
+        not(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd",
+            target_os = "netbsd",
+            target_os = "openbsd",
+            target_os = "dragonfly"
+        ))
     ))]
     const ENOLCK: i32 = 37;
 
@@ -326,6 +332,9 @@ mod native {
         };
         let file = 'outer: loop {
             attempts += 1;
+            if attempts > SOFT_RETRIES && deadline.is_some_and(|d| Instant::now() >= d) {
+                return Err(fail(LockError::Held { holder: read_record(ws) }, created_cache));
+            }
             if attempts > MAX_IDENTITY_RETRIES {
                 return Err(fail(refuse(&lock_path, "the lock file keeps changing"), created_cache));
             }
