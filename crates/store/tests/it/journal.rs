@@ -90,7 +90,7 @@ fn journal_fields_are_checked_and_named() {
     for entries in ["{}", "[]", "5", "null"] {
         assert_eq!(corrupt(&raw(&tag(), "c", entries)).field, Some("entries"), "entries {entries}");
     }
-    for path in ["../x", "/x", ".cache/journal/head.json", ".CACHE/x", ".cache", "con.md", ""] {
+    for path in ["../x", "/x", ".cache/journal/head.json", ".CACHE/x", ".cache", ".local/lock", ".LOCAL/journal/x.json", "con.md", ""] {
         let e = corrupt(&raw(&tag(), "c", &one(path, "null", &a)));
         assert_eq!(e.field, Some("path"), "path {path:?}");
     }
@@ -138,10 +138,40 @@ fn digest_tells_bytes_apart() {
 // ADR 0006 #8: the reservation is on the first segment, in any case.
 #[test]
 fn is_reserved_covers_the_first_segment_in_any_case() {
-    for p in [".cache", ".cache/", ".cache/x", ".Cache/x", ".CACHE/journal/head.json", ".cAcHe", JOURNAL_HEAD, JOURNAL_DIR] {
+    for p in [
+        ".cache",
+        ".cache/",
+        ".cache/x",
+        ".Cache/x",
+        ".CACHE/journal/head.json",
+        ".cAcHe",
+        ".local",
+        ".local/",
+        ".local/x",
+        ".LOCAL/x",
+        ".LoCaL",
+        ".local/lock",
+        JOURNAL_HEAD,
+        JOURNAL_DIR,
+    ] {
         assert!(is_reserved(p), "{p}");
     }
-    for p in ["a/.cache/x", "pages/.cache", ".cachex", ".caches/x", "cache/x", "x/.CACHE", "pages/a.md", ""] {
+    for p in [
+        "a/.cache/x",
+        "pages/.cache",
+        ".cachex",
+        ".caches/x",
+        "cache/x",
+        "x/.CACHE",
+        "a/.local/x",
+        "pages/.local",
+        ".localx",
+        ".locals/x",
+        "local/x",
+        "x/.LOCAL",
+        "pages/a.md",
+        "",
+    ] {
         assert!(!is_reserved(p), "{p}");
     }
 }

@@ -35,10 +35,10 @@ pub enum Entry {
 }
 
 /// Every entry below `dir`, recursively, without following symlinks.
-/// `.cache/lock` is recorded as present with no bytes: its content means nothing, and Windows
+/// `.local/lock` is recorded as present with no bytes: its content means nothing, and Windows
 /// refuses to read a file another handle has locked (OS error 33).
 fn is_lock_file(rel: &str) -> bool {
-    rel == ".cache/lock" || rel.ends_with("/.cache/lock")
+    rel == ".local/lock" || rel.ends_with("/.local/lock")
 }
 
 pub fn tree(dir: &Path) -> BTreeMap<String, Entry> {

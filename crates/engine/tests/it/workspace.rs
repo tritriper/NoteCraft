@@ -116,19 +116,21 @@ fn create_without_name_uses_the_folder_name() {
 }
 
 #[test]
-fn create_with_a_name_uses_it_and_refuses_a_blank_one() {
+fn create_with_a_name_stores_it_trimmed_and_a_blank_one_is_absent() {
     let dir = TempDir::new();
     let p = project(&dir);
     let mut s = bare_session();
-    let before = tree(dir.path());
-    let e = err(s.run("workspace.create", &json!({"path": p.to_str().unwrap(), "name": "   "})));
-    assert_eq!(code(&e), "invalid_params");
-    assert_eq!(detail(&e, "field"), Some("name"));
-    assert_eq!(tree(dir.path()), before);
-    assert!(!s.is_open());
+    // A blank name is the same as none: the project folder's name, and the create succeeds.
+    s.run("workspace.create", &json!({"path": p.to_str().unwrap(), "name": "   "})).unwrap();
+    assert_eq!(info(&mut s).unwrap()["name"], json!("my-project"));
+    assert!(s.is_open());
 
-    s.run("workspace.create", &json!({"path": p.to_str().unwrap(), "name": "Field notes"})).unwrap();
+    let other = TempDir::new();
+    let q = project(&other);
+    s.run("workspace.create", &json!({"path": q.to_str().unwrap(), "name": "  Field notes  "})).unwrap();
     assert_eq!(info(&mut s).unwrap()["name"], json!("Field notes"));
+    let written: Value = serde_json::from_slice(&std::fs::read(q.join("notecraft/workspace.json")).unwrap()).unwrap();
+    assert_eq!(written["name"], json!("Field notes"), "the manifest holds the trimmed name");
 }
 
 // AT-L0-03-b
@@ -287,7 +289,7 @@ fn at_l0_03_c_newer_format_opens_read_only_and_refuses_mutations() {
     let mut s = bare_session();
     let r = open(&mut s, dir.path()).unwrap();
     assert_eq!(r["readOnly"], json!(true));
-    assert_eq!(r["readOnlyReason"], json!("newer_format"));
+    assert_eq!(r["readOnlyReason"], json!("newerFormat"));
     assert!(r["notice"].as_str().is_some_and(|n| !n.is_empty()), "rule 15: say which version wrote it");
     assert!(s.read_only());
 
@@ -296,7 +298,7 @@ fn at_l0_03_c_newer_format_opens_read_only_and_refuses_mutations() {
     for id in mutating {
         let e = err(s.run(id, &params_for(id)));
         assert_eq!(code(&e), "read_only", "{id}");
-        assert_eq!(detail(&e, "reason"), Some("newer_format"), "{id}");
+        assert_eq!(detail(&e, "reason"), Some("newerFormat"), "{id}");
     }
     assert_eq!(tree(dir.path()), before);
     assert_eq!(info(&mut s).unwrap()["readOnly"], json!(true));
@@ -324,7 +326,7 @@ fn read_only_on_request() {
     let mut w = bare_session();
     let r = open(&mut w, &p).unwrap();
     assert_eq!(r["readOnly"], json!(false));
-    assert_eq!(r["readOnlyReason"], Value::Null);
+    assert!(r.get("readOnlyReason").is_none(), "a writable open names no reason: {r}");
     write_ok(&mut w, &[("pages/a.md", "x")]);
 }
 

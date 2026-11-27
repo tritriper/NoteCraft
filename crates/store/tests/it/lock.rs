@@ -3,14 +3,18 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use notecraft_store::{Holder, LOCK_FILE, LOCK_RECORD, LockError, OpenMode, Project, Workspace};
+use notecraft_store::{Holder, LOCAL_DIR, LOCK_FILE, LOCK_RECORD, LockError, OpenMode, Project, Workspace};
 
 use crate::support::*;
 
 const LONG: Duration = Duration::from_secs(60);
 
-pub fn holder(pid: u32, command: &str) -> Holder {
-    Holder { pid: Some(pid), command: Some(command.to_string()), started: Some(1_700_000_000_000) }
+pub fn holder(pid: u32, _label: &str) -> Holder {
+    Holder { process: Some("cli".to_string()), pid: Some(pid), host: None, since: Some("2026-11-27T10:00:00Z".to_string()) }
+}
+
+fn local(ws: &Workspace) -> PathBuf {
+    ws.dir().join(LOCAL_DIR)
 }
 
 fn cache(ws: &Workspace) -> PathBuf {
@@ -18,7 +22,7 @@ fn cache(ws: &Workspace) -> PathBuf {
 }
 
 fn plant_record(ws: &Workspace, bytes: &[u8]) {
-    std::fs::create_dir_all(cache(ws)).unwrap();
+    std::fs::create_dir_all(local(ws)).unwrap();
     std::fs::write(ws.dir().join(LOCK_RECORD), bytes).unwrap();
 }
 
@@ -39,9 +43,11 @@ fn lock_excludes_a_second_handle_and_reports_the_holder() {
 
     let guard = first.lock(&a, Duration::ZERO).unwrap();
     assert_eq!(guard.stale(), None, "a fresh acquisition finds no stale record");
-    assert_eq!(held_holder(second.lock(&b, Duration::ZERO)), Some(a.clone()), "the refusal names the holder");
-    assert_eq!(second.holder(), Some(a.clone()));
-    assert_eq!(first.holder(), Some(a), "holder() reads the record without the lock");
+    let named = held_holder(second.lock(&b, Duration::ZERO)).unwrap();
+    assert_eq!((named.pid, named.process.clone()), (a.pid, a.process.clone()), "the refusal names the holder");
+    let seen = second.holder().unwrap();
+    assert_eq!((seen.pid, seen.process), (a.pid, a.process.clone()));
+    assert_eq!(first.holder().unwrap().pid, a.pid, "holder() reads the record without the lock");
 
     drop(guard);
     let again = second.lock(&b, LONG).unwrap();
@@ -69,7 +75,7 @@ fn a_bounded_wait_that_runs_out_gives_held_and_does_not_hang() {
     let a = holder(1, "a");
     let _guard = first.lock(&a, LONG).unwrap();
     let h = held_holder(second.lock(&holder(2, "b"), Duration::from_millis(40)));
-    assert_eq!(h, Some(a));
+    assert_eq!(h.map(|h| h.pid), Some(a.pid));
 }
 
 // Reads never lock.
@@ -115,22 +121,24 @@ fn a_record_naming_a_live_pid_is_still_stale() {
     let dir = TempDir::new();
     let project = new_project(&dir);
     let ws = open_rw(&project);
-    let alive = Holder { pid: Some(std::process::id()), command: Some("x".into()), started: None };
+    let alive = Holder { process: Some("app".into()), pid: Some(std::process::id()), host: None, since: None };
     plant_record(&ws, &alive.to_bytes());
     let guard = ws.lock(&holder(1, "me"), Duration::ZERO).unwrap();
     assert_eq!(guard.stale(), Some(&alive));
 }
 
-// ADR 0007 #4 (amended): the empty lock file stays, the record goes.
+// ADR 0007 #4 (amended), file-format 9.1: the empty lock file stays, the record goes.
 #[test]
 fn a_released_lock_keeps_only_the_empty_lock_file_and_what_was_there() {
     let lock_file_is_empty =
         |ws: &Workspace| std::fs::symlink_metadata(ws.dir().join(LOCK_FILE)).map(|m| m.is_file() && m.len() == 0).unwrap_or(false);
 
-    // `.cache/` absent (a fresh clone): the acquisition creates it, and it stays.
+    // `.local/` absent (a fresh clone): the acquisition creates it, and it stays. `.cache/` was
+    // absent and stays absent: the lock is not ours to put there.
     let dir = TempDir::new();
     let project = new_project(&dir);
     let ws = open_rw(&project);
+    let _ = std::fs::remove_dir_all(local(&ws));
     let _ = std::fs::remove_dir_all(cache(&ws));
     let guard = ws.lock(&holder(1, "a"), LONG).unwrap();
     assert!(!absent(&ws.dir().join(LOCK_FILE)), "the lock file exists while held");
@@ -138,7 +146,8 @@ fn a_released_lock_keeps_only_the_empty_lock_file_and_what_was_there() {
     drop(guard);
     assert!(absent(&ws.dir().join(LOCK_RECORD)), "the record goes");
     assert!(lock_file_is_empty(&ws), "the lock file stays, empty");
-    assert!(cache(&ws).is_dir(), "`.cache/` stays");
+    assert!(local(&ws).is_dir(), "`.local/` stays");
+    assert!(absent(&cache(&ws)), "`.cache/` is not created by the lock");
     assert_eq!(ws.holder(), None);
 
     // A second cycle leaves the tree identical to the first, mtimes included.
@@ -146,16 +155,16 @@ fn a_released_lock_keeps_only_the_empty_lock_file_and_what_was_there() {
     drop(ws.lock(&holder(1, "a"), LONG).unwrap());
     assert_eq!(tree(ws.dir()), first);
 
-    // Something else in `.cache/`: it stays, and so do the other files.
-    std::fs::write(cache(&ws).join("other"), "mine").unwrap();
+    // Something else in `.local/`: it stays, and so do the other files.
+    std::fs::write(local(&ws).join("other"), "mine").unwrap();
     drop(ws.lock(&holder(1, "a"), LONG).unwrap());
-    assert_eq!(std::fs::read(cache(&ws).join("other")).unwrap(), b"mine");
+    assert_eq!(std::fs::read(local(&ws).join("other")).unwrap(), b"mine");
     assert!(lock_file_is_empty(&ws));
     assert!(absent(&ws.dir().join(LOCK_RECORD)));
 }
 
-// ADR 0007 #4 (amended), AT-L0-03-d: `create` makes the empty lock file, so the first open of a
-// fresh workspace does not make `.cache/` appear.
+// ADR 0007 #4 (amended), AT-L0-03-d: `create` makes the empty `.local/lock` (LOCK_FILE), so the
+// first open of a fresh workspace does not make `.local/` appear.
 #[test]
 fn create_makes_the_empty_lock_file() {
     let dir = TempDir::new();
@@ -198,18 +207,24 @@ fn holder_reads_the_record_without_failing() {
     assert_eq!(ws.holder(), None, "a folder is not a record");
 }
 
-// Holder codec: the record round trip.
+// Holder codec: the record round trip of all four keys; strings are bounded and checked.
 #[test]
-fn the_holder_codec_round_trips_and_clips_a_long_command() {
-    for h in [holder(7, "page.move"), Holder::default(), Holder { pid: None, command: Some("só ✓".into()), started: Some(0) }] {
+fn the_holder_codec_round_trips_and_clips_a_long_host() {
+    let full = Holder { process: Some("mcp".into()), pid: Some(7), host: Some("só-✓.example".into()), since: Some("2026-11-27T10:00:00Z".into()) };
+    for h in [holder(7, "x"), Holder::default(), full] {
         assert_eq!(Holder::parse(&h.to_bytes()), h);
     }
-    let long = Holder { pid: Some(1), command: Some("é".repeat(10_000)), started: None };
+    let long = Holder { process: Some("cli".into()), pid: Some(1), host: Some("é".repeat(10_000)), since: None };
     let parsed = Holder::parse(&long.to_bytes());
-    let command = parsed.command.unwrap();
-    assert!(command.len() <= 200, "clipped to 200 bytes");
-    assert!(!command.is_empty() && "é".repeat(10_000).starts_with(&command), "clipped on a character boundary");
+    let host = parsed.host.unwrap();
+    assert!(host.len() < 10_000 * 2, "clipped");
+    assert!(!host.is_empty() && "é".repeat(10_000).starts_with(&host), "clipped on a character boundary");
     assert_eq!(parsed.pid, Some(1));
+
+    let odd = |json: &str| Holder::parse(json.as_bytes());
+    assert_eq!(odd(r#"{"process":"daemon","pid":1}"#).process, None, "only app, cli and mcp are processes");
+    assert_eq!(odd(r#"{"process":"daemon","pid":1}"#).pid, Some(1), "the other keys survive");
+    assert_eq!(odd(r#"{"since":"yesterday"}"#).since, None, "since is an RFC 3339 time or nothing");
 }
 
 // ---- review round 1: contention between handles ----
@@ -274,14 +289,14 @@ fn handles_that_all_wait_take_the_lock_one_at_a_time() {
     assert_eq!(taken, THREADS * ROUNDS, "every waiter gets its turn");
 }
 
-// First writers on a fresh workspace: `.cache/` appears and disappears between the checks.
+// First writers on a fresh workspace: `.local/` appears and disappears between the checks.
 #[test]
 fn first_writers_racing_on_a_fresh_workspace_all_succeed() {
     for _ in 0..20 {
         let dir = TempDir::new();
         let project = new_project(&dir);
         let ws = open_rw(&project);
-        let _ = std::fs::remove_dir_all(cache(&ws));
+        let _ = std::fs::remove_dir_all(local(&ws));
         let start = std::sync::Barrier::new(THREADS);
         let failures: Vec<String> = std::thread::scope(|s| {
             let jobs: Vec<_> = (0..THREADS)

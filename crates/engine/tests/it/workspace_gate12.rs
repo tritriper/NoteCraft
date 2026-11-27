@@ -247,18 +247,82 @@ fn info_counts_rows_apart_from_pages() {
     assert_eq!((i["pages"].clone(), i["databases"].clone(), i["rows"].clone()), (json!(0), json!(1), json!(1)));
 }
 
-/// The first read-write open of a hand-made workspace adds the persistent, empty, gitignored
-/// `.cache/lock` (ADR 0007) and its folder; drops exactly those new entries, so anything else that
-/// changed still shows.
+// AT-L0-03-h: a blank name is absent, a given name is stored trimmed.
+#[test]
+fn at_l0_03_h_a_given_name_is_trimmed_and_a_blank_one_falls_back() {
+    for blank in ["", "   ", "\t\n"] {
+        let dir = TempDir::new();
+        let p = project(&dir);
+        let mut s = bare_session();
+        s.run("workspace.create", &json!({"path": p.to_str().unwrap(), "name": blank})).unwrap_or_else(|e| panic!("{blank:?}: {e:?}"));
+        assert_eq!(info(&mut s).unwrap()["name"], json!("my-project"), "{blank:?}");
+        s.run("workspace.close", &json!({})).unwrap();
+        assert_eq!(open(&mut bare_session(), &p).unwrap()["name"], json!("my-project"), "{blank:?}: reopened");
+    }
+    let dir = TempDir::new();
+    let p = project(&dir);
+    let mut s = bare_session();
+    s.run("workspace.create", &json!({"path": p.to_str().unwrap(), "name": "  A  "})).unwrap();
+    assert_eq!(info(&mut s).unwrap()["name"], json!("A"));
+    let written: Value = serde_json::from_slice(&std::fs::read(p.join("notecraft/workspace.json")).unwrap()).unwrap();
+    assert_eq!(written["name"], json!("A"), "stored trimmed");
+    s.run("workspace.close", &json!({})).unwrap();
+    assert_eq!(open(&mut bare_session(), &p).unwrap()["name"], json!("A"), "reopened");
+}
+
+// AT-L0-03-i: a file, or a folder with something in it and no manifest, is refused; an empty one is used.
+#[test]
+fn at_l0_03_i_a_notecraft_file_or_non_empty_folder_is_refused_and_an_empty_one_used() {
+    type Setup = fn(&Path);
+    let refused: Vec<(&str, Setup)> = vec![
+        ("a file", |p| std::fs::write(p.join("notecraft"), "x").unwrap()),
+        ("a folder with one stray file", |p| {
+            std::fs::create_dir_all(p.join("notecraft")).unwrap();
+            std::fs::write(p.join("notecraft/stray.txt"), "x").unwrap();
+        }),
+        ("a folder with only the ignore file", |p| {
+            std::fs::create_dir_all(p.join("notecraft")).unwrap();
+            std::fs::write(p.join("notecraft/.gitignore"), ".cache/\n.local/\n").unwrap();
+        }),
+        ("a folder with only .local", |p| std::fs::create_dir_all(p.join("notecraft/.local")).unwrap()),
+    ];
+    for (label, setup) in refused {
+        let dir = TempDir::new();
+        let p = project(&dir);
+        setup(&p);
+        let before = tree(dir.path());
+        let mut s = bare_session();
+        let e = err(s.run("workspace.create", &path_param(&p)));
+        assert_eq!(code(&e), "invalid_params", "{label}");
+        assert_eq!(detail(&e, "field"), Some("path"), "{label}");
+        assert_short(&e);
+        assert_eq!(tree(dir.path()), before, "{label}: nothing is written");
+        assert!(!s.is_open(), "{label}");
+    }
+
+    let dir = TempDir::new();
+    let p = project(&dir);
+    std::fs::create_dir(p.join("notecraft")).unwrap();
+    let mut s = bare_session();
+    create(&mut s, &p);
+    for rel in ["workspace.json", ".gitignore", ".gitattributes", "pages", "attachments"] {
+        assert!(p.join("notecraft").join(rel).exists(), "{rel}");
+    }
+    assert!(info(&mut s).is_ok());
+}
+
+/// The first read-write open of a hand-made workspace adds the persistent, empty, ignored
+/// `.local/lock` (file-format 9.1) and its folder; drops exactly those new entries, so anything
+/// else that changed still shows.
 fn without_new_lock_file(
     mut after: std::collections::BTreeMap<String, Entry>,
     before: &std::collections::BTreeMap<String, Entry>,
 ) -> std::collections::BTreeMap<String, Entry> {
     let new: Vec<String> = after.keys().filter(|k| !before.contains_key(*k)).cloned().collect();
     for k in new {
-        let lock = k.ends_with("/.cache/lock") && matches!(after.get(&k), Some(Entry::File { bytes, .. }) if bytes.is_empty());
-        let cache = k.ends_with("/.cache") && matches!(after.get(&k), Some(Entry::Dir));
-        if lock || cache {
+        let lock = k.ends_with("/.local/lock") && matches!(after.get(&k), Some(Entry::File { bytes, .. }) if bytes.is_empty());
+        let local = k.ends_with("/.local") && matches!(after.get(&k), Some(Entry::Dir));
+        if lock || local {
             after.remove(&k);
         }
     }

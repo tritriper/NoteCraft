@@ -38,8 +38,8 @@ fn sweep_removes_only_leftovers() {
 
     // Leftovers.
     put(&w, "pages/x/.a.md.123-4.craft_tmp", b"half");
-    put(&w, ".cache/journal/0.before", b"orphan");
-    put(&w, ".cache/journal/17.before", b"orphan");
+    put(&w, ".local/journal/0.before", b"orphan");
+    put(&w, ".local/journal/17.before", b"orphan");
     put(&project, ".notecraft-new.OLDSTAGING.craft_tmp/workspace.json", b"half");
     // Things that only look similar.
     put(&w, "pages/a.craft_tmp", b"user file");
@@ -49,7 +49,7 @@ fn sweep_removes_only_leftovers() {
     let swept = ws.sweep().unwrap();
     assert!(swept.complete);
     assert!(swept.removed >= 3, "{swept:?}");
-    for gone in ["pages/x/.a.md.123-4.craft_tmp", ".cache/journal/0.before", ".cache/journal/17.before"] {
+    for gone in ["pages/x/.a.md.123-4.craft_tmp", ".local/journal/0.before", ".local/journal/17.before"] {
         assert!(!exists(&w, gone), "{gone} must be swept");
     }
     assert!(!exists(&project, ".notecraft-new.OLDSTAGING.craft_tmp"), "a leftover staging folder is swept");
@@ -71,10 +71,10 @@ fn sweep_keeps_a_journal_that_has_a_head() {
     let ws = workspace(&dir);
     let w = ws.dir().to_path_buf();
     put(&w, JOURNAL_HEAD, b"{}");
-    put(&w, ".cache/journal/0.before", b"needed for recovery");
+    put(&w, ".local/journal/0.before", b"needed for recovery");
     put(&w, "pages/.a.md.1-1.craft_tmp", b"half");
     ws.sweep().unwrap();
-    assert!(exists(&w, JOURNAL_HEAD) && exists(&w, ".cache/journal/0.before"));
+    assert!(exists(&w, JOURNAL_HEAD) && exists(&w, ".local/journal/0.before"));
     assert!(!exists(&w, "pages/.a.md.1-1.craft_tmp"));
 }
 
@@ -84,17 +84,19 @@ fn a_read_only_handle_does_not_sweep() {
     let dir = TempDir::new();
     let ws = workspace(&dir);
     let w = ws.dir().to_path_buf();
-    put(&w, ".cache/journal/0.before", b"orphan");
+    put(&w, ".local/journal/0.before", b"orphan");
     put(&w, "pages/.a.md.1-1.craft_tmp", b"half");
     let before = tree(dir.path());
 
-    for reason in [ReadOnlyReason::Recovery, ReadOnlyReason::Requested, ReadOnlyReason::NewerFormat] {
+    for reason in [ReadOnlyReason::Recovery, ReadOnlyReason::Requested, ReadOnlyReason::NewerFormat, ReadOnlyReason::NoLock] {
         let ro = ws.clone().with_read_only(reason);
         assert_eq!(ro.read_only(), Some(reason));
         assert!(matches!(ro.sweep(), Err(StoreError::ReadOnly { .. })), "{reason:?}");
         assert!(matches!(ro.write(&RelPath::parse("pages/n.md").unwrap(), b"x"), Err(StoreError::ReadOnly { .. })));
     }
     assert_eq!(ReadOnlyReason::Recovery.as_str(), "recovery");
+    assert_eq!(ReadOnlyReason::NoLock.as_str(), "noLock");
+    assert_eq!(ReadOnlyReason::NewerFormat.as_str(), "newerFormat");
     assert_eq!(tree(dir.path()), before);
 }
 

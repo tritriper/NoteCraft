@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use notecraft_store::{Holder, LOCK_FILE, LOCK_RECORD, LockError};
+use notecraft_store::{Holder, LOCAL_DIR, LOCK_FILE, LOCK_RECORD, LockError};
 
 use crate::lock::holder;
 use crate::support::*;
@@ -38,14 +38,14 @@ struct Fx {
     ws: PathBuf,
 }
 
-/// A workspace with `pages/a.md` and an empty `.cache/`.
+/// A workspace with `pages/a.md` and an empty `.local/`.
 fn fx() -> Fx {
     let dir = TempDir::new();
     let project = new_project(&dir);
     let ws = ws_dir(&project);
     std::fs::create_dir_all(ws.join("pages")).unwrap();
     std::fs::write(ws.join("pages/a.md"), "page A").unwrap();
-    std::fs::create_dir_all(ws.join(".cache")).unwrap();
+    std::fs::create_dir_all(ws.join(LOCAL_DIR)).unwrap();
     Fx { _dir: dir, project, ws }
 }
 
@@ -87,41 +87,57 @@ fn holder_parse_is_total_on_hostile_bytes() {
 #[test]
 fn holder_parse_gives_none_for_a_key_of_the_wrong_type() {
     let parse = |s: &str| Holder::parse(s.as_bytes());
+    let ok = r#""process": "mcp", "pid": 3, "host": "h", "since": "2026-11-27T10:00:00Z""#;
+    let full = parse(&format!("{{{ok}}}"));
+    assert_eq!((full.process.as_deref(), full.pid, full.host.as_deref()), (Some("mcp"), Some(3), Some("h")));
+    assert_eq!(full.since.as_deref(), Some("2026-11-27T10:00:00Z"));
+    let others = |skip: &str| -> String {
+        let all =
+            [("process", r#""process": "mcp""#), ("pid", r#""pid": 3"#), ("host", r#""host": "h""#), ("since", r#""since": "2026-11-27T10:00:00Z""#)];
+        all.iter().filter(|(k, _)| *k != skip).map(|(_, v)| *v).collect::<Vec<_>>().join(", ")
+    };
     for pid in ["-1", "4294967296", "1.5", "\"12\"", "null", "[]"] {
-        let h = parse(&format!("{{\"pid\": {pid}, \"command\": \"c\", \"started\": 5}}"));
+        let h = parse(&format!("{{\"pid\": {pid}, {}}}", others("pid")));
         assert_eq!(h.pid, None, "pid {pid}");
-        assert_eq!(h.command.as_deref(), Some("c"), "pid {pid}: the other keys survive");
-        assert_eq!(h.started, Some(5), "pid {pid}: the other keys survive");
+        assert_eq!(h.process.as_deref(), Some("mcp"), "pid {pid}: the other keys survive");
+        assert_eq!(h.host.as_deref(), Some("h"), "pid {pid}: the other keys survive");
     }
-    for started in ["-1", "1e300", "\"1\"", "1.5"] {
-        let h = parse(&format!("{{\"pid\": 3, \"started\": {started}}}"));
-        assert_eq!(h.started, None, "started {started}");
-        assert_eq!(h.pid, Some(3), "started {started}: the other keys survive");
+    for (key, bad) in
+        [("process", ["12", "null", "[]", "\"daemon\""]), ("host", ["12", "null", "[]", "{}"]), ("since", ["12", "null", "[]", "\"yesterday\""])]
+    {
+        for value in bad {
+            let h = parse(&format!("{{\"{key}\": {value}, {}}}", others(key)));
+            let got = match key {
+                "process" => h.process.clone(),
+                "host" => h.host.clone(),
+                _ => h.since.clone(),
+            };
+            assert_eq!(got, None, "{key} {value}");
+            assert_eq!(h.pid, Some(3), "{key} {value}: the other keys survive");
+        }
     }
-    assert_eq!(parse("{\"command\": 12}").command, None);
-    assert_eq!(parse("{\"command\": null}").command, None);
     assert_eq!(parse("{\"pid\": 4294967295}").pid, Some(u32::MAX));
 }
 
 #[test]
-fn holder_parse_clips_a_huge_command_and_keeps_strange_characters_valid() {
-    let huge = format!("{{\"command\": \"{}\"}}", "x".repeat(1 << 20));
+fn holder_parse_clips_a_huge_host_and_keeps_strange_characters_valid() {
+    let huge = format!("{{\"host\": \"{}\"}}", "x".repeat(1 << 20));
     // Larger than the record cap, so a codec that read it whole would hand back a huge string.
     let h = Holder::parse(huge.as_bytes());
-    assert!(h.command.is_none_or(|c| c.len() <= 200));
-    let medium = format!("{{\"command\": \"{}\"}}", "ü".repeat(1500));
-    let c = Holder::parse(medium.as_bytes()).command.unwrap();
-    assert!(c.len() <= 200 && !c.is_empty());
+    assert!(h.host.is_none_or(|c| c.len() <= 255));
+    let medium = format!("{{\"host\": \"{}\"}}", "ü".repeat(1500));
+    let c = Holder::parse(medium.as_bytes()).host.unwrap();
+    assert!(c.len() <= 255 && !c.is_empty());
     for odd in ["a\\u0000b", "\\u202eevil\\u202c", "\\ud800"] {
-        let h = Holder::parse(format!("{{\"command\": \"{odd}\"}}").as_bytes());
-        assert!(h.command.is_none_or(|c| c.len() <= 200));
+        let h = Holder::parse(format!("{{\"host\": \"{odd}\"}}").as_bytes());
+        assert!(h.host.is_none_or(|c| c.len() <= 255));
     }
     let with_bom = [&[0xEF, 0xBB, 0xBF][..], b"{\"pid\": 8}"].concat();
     assert_eq!(Holder::parse(&with_bom).pid, Some(8), "a BOM is skipped");
     assert_eq!(Holder::parse(b"{\"pid\": 8, \"extra\": [1, {\"a\": null}]}").pid, Some(8), "unknown keys are ignored");
 }
 
-// ---- .cache/lock ----
+// ---- .local/lock ----
 
 #[test]
 fn a_lock_file_that_is_a_folder_gives_io_and_the_folder_stays() {
@@ -195,7 +211,7 @@ fn a_lock_file_without_write_permission_gives_io() {
     assert_io(&try_lock(&f.project), "read-only lock file");
 }
 
-// ---- .cache/lock.json ----
+// ---- .local/lock.json ----
 
 #[test]
 fn a_record_that_is_a_folder_is_skipped_and_kept() {
@@ -233,11 +249,11 @@ fn a_record_that_is_a_fifo_is_not_read() {
 
 #[test]
 fn hostile_records_are_stale_and_never_an_error() {
-    let big = format!("{{\"command\": \"{}\"}}", "z".repeat(1 << 20));
+    let big = format!("{{\"host\": \"{}\"}}", "z".repeat(1 << 20));
     let cases: Vec<(&str, Vec<u8>)> = vec![
         ("garbage", vec![0xFF, 0x00, 0xFE]),
         ("huge", big.into_bytes()),
-        ("foreign", b"{\"owner\": \"someone else\", \"pid\": \"x\"}".to_vec()),
+        ("foreign", b"{\"owner\": \"someone else\", \"pid\": \"x\", \"process\": 7}".to_vec()),
         ("deep", "[".repeat(100_000).into_bytes()),
     ];
     for (label, bytes) in cases {
@@ -249,32 +265,32 @@ fn hostile_records_are_stale_and_never_an_error() {
     }
 }
 
-// ---- .cache ----
+// ---- .local ----
 
 #[test]
-fn a_cache_that_is_a_regular_file_gives_io_and_the_file_is_kept() {
+fn a_local_that_is_a_regular_file_gives_io_and_the_file_is_kept() {
     let f = fx();
-    std::fs::remove_dir_all(f.ws.join(".cache")).unwrap();
-    std::fs::write(f.ws.join(".cache"), "not a folder").unwrap();
-    assert_io(&try_lock(&f.project), ".cache file");
-    assert_eq!(std::fs::read(f.ws.join(".cache")).unwrap(), b"not a folder");
+    std::fs::remove_dir_all(f.ws.join(LOCAL_DIR)).unwrap();
+    std::fs::write(f.ws.join(LOCAL_DIR), "not a folder").unwrap();
+    assert_io(&try_lock(&f.project), ".local file");
+    assert_eq!(std::fs::read(f.ws.join(LOCAL_DIR)).unwrap(), b"not a folder");
 }
 
 #[cfg(unix)]
 #[test]
-fn a_cache_that_is_a_symlink_gives_io_and_the_files_it_points_at_are_unchanged() {
+fn a_local_that_is_a_symlink_gives_io_and_the_files_it_points_at_are_unchanged() {
     let f = fx();
-    std::fs::remove_dir_all(f.ws.join(".cache")).unwrap();
+    std::fs::remove_dir_all(f.ws.join(LOCAL_DIR)).unwrap();
     // Out of the workspace.
     let out = outside(&f);
-    std::os::unix::fs::symlink(&out, f.ws.join(".cache")).unwrap();
+    std::os::unix::fs::symlink(&out, f.ws.join(LOCAL_DIR)).unwrap();
     assert_io(&try_lock(&f.project), "link out");
     assert_eq!(std::fs::read_dir(&out).unwrap().count(), 0, "nothing was written outside");
-    std::fs::remove_file(f.ws.join(".cache")).unwrap();
+    std::fs::remove_file(f.ws.join(LOCAL_DIR)).unwrap();
     // Inside the workspace, at a folder that holds the user's files named like ours.
     std::fs::write(f.ws.join("pages/lock"), "user lock").unwrap();
     std::fs::write(f.ws.join("pages/lock.json"), "user record").unwrap();
-    std::os::unix::fs::symlink(f.ws.join("pages"), f.ws.join(".cache")).unwrap();
+    std::os::unix::fs::symlink(f.ws.join("pages"), f.ws.join(LOCAL_DIR)).unwrap();
     assert_io(&try_lock(&f.project), "link to pages");
     assert_eq!(std::fs::read(f.ws.join("pages/lock")).unwrap(), b"user lock");
     assert_eq!(std::fs::read(f.ws.join("pages/lock.json")).unwrap(), b"user record");

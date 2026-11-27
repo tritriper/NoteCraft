@@ -129,7 +129,7 @@ fn a_single_file_commit_keeps_no_journal_and_a_crash_leftover_is_swept() {
         write_ok(&mut s, &[("pages/a.md", "one")]);
         let ops = ctl.ops();
         assert!(!ops.is_empty());
-        assert!(ops.iter().all(|(_, p)| !is_reserved(p)), "a one-file commit must not touch .cache/: {ops:?}");
+        assert!(ops.iter().all(|(_, p)| !is_reserved(p)), "a one-file commit must not touch .cache/ or .local/: {ops:?}");
     }
     // What a killed `atomic_write` leaves beside an intact file.
     let temp = fx.ws.join("pages/.a.md.999-0.craft_tmp");
@@ -226,10 +226,10 @@ fn at_l0_10_b_a_failing_command_leaves_the_tree_hash_unchanged() {
     std::fs::create_dir_all(fx.ws.join("attachments")).unwrap();
     std::fs::write(fx.ws.join("attachments/x"), "i am a file").unwrap();
     let (mut s, _) = reopen(&fx);
-    let h0 = tree_hash(&fx.ws);
+    let h0 = full_state(&fx.ws);
     let check = |label: &str, r: notecraft_engine::CmdResult| -> CmdError {
         let e = r.expect_err(label);
-        assert_eq!(tree_hash(&fx.ws), h0, "{label}");
+        assert_eq!(full_state(&fx.ws), h0, "{label}");
         e
     };
 
@@ -239,7 +239,7 @@ fn at_l0_10_b_a_failing_command_leaves_the_tree_hash_unchanged() {
     check("handler error", s.run("test.writeFiles", &staged));
     check("handler panic", s.run("test.panics", &json!({})));
 
-    for path in [".cache/x", ".CACHE/journal/head.json"] {
+    for path in [".cache/x", ".CACHE/journal/head.json", ".local/x", ".LOCAL/journal/x.json"] {
         let params = json!({"files": [{"path": "pages/a.md", "content": "1"}, {"path": path, "content": "x"}]});
         let e = check(path, s.run("test.writeFiles", &params));
         assert_eq!(code(&e), "io", "{path}");
@@ -276,10 +276,10 @@ fn at_l0_10_b_a_failure_at_every_step_leaves_the_tree_hash_unchanged() {
 
         for k in 1..=n {
             let fx = clone_fixture(&base);
-            let h0 = tree_hash(&fx.ws);
+            let h0 = full_state(&fx.ws);
             let (mut s, _) = flaky_session(&fx, &[k], journaled);
             match s.run("test.writeFiles", &move_params(5)) {
-                Err(_) => assert_eq!(tree_hash(&fx.ws), h0, "journaled={journaled} k={k}"),
+                Err(_) => assert_eq!(full_state(&fx.ws), h0, "journaled={journaled} k={k}"),
                 Ok(_) => assert_eq!(content(&fx.ws), after, "journaled={journaled} k={k}: success means the state after"),
             }
             if Some(k) == c {
@@ -333,14 +333,14 @@ fn a_pending_recovery_that_is_refused_blocks_the_next_commit() {
     err_of(s.run("test.writeFiles", &move_params(5)));
     // Someone edits a file the journal covers: recovery must not overwrite it.
     std::fs::write(fx.ws.join("pages/l0.md"), "edited by hand").unwrap();
-    let h = tree_hash(&fx.ws);
+    let h = full_state(&fx.ws);
     let e = err_of(s.run("test.writeFiles", &writes(&[("pages/z.md", "z")])));
     assert_eq!(code(&e), "io");
     assert_eq!(detail(&e, "reason"), Some("recovery_pending"));
-    assert_eq!(tree_hash(&fx.ws), h, "nothing else is written");
+    assert_eq!(full_state(&fx.ws), h, "nothing else is written");
     // Undo is a commit too.
     assert!(s.run("edit.undo", &json!({})).is_err());
-    assert_eq!(tree_hash(&fx.ws), h);
+    assert_eq!(full_state(&fx.ws), h);
 }
 
 // ADR 0006 #6
@@ -352,13 +352,13 @@ fn recovery_refuses_when_a_file_changed_since_the_crash() {
     let mut bytes = std::fs::read(&edited).unwrap();
     bytes.extend_from_slice(b"\nedited outside NoteCraft\n");
     std::fs::write(&edited, &bytes).unwrap();
-    let h = tree_hash(&fx.ws);
+    let h = full_state(&fx.ws);
 
     let (mut s, opened) = reopen(&fx);
     assert_refused(&opened, "conflict");
     assert_eq!(recovery(&opened)["reason"], json!("conflict"));
     assert!(recovery(&opened)["paths"].as_array().unwrap().contains(&json!("pages/l0.md")));
-    assert_eq!(tree_hash(&fx.ws), h, "a refused recovery writes nothing and keeps the journal");
+    assert_eq!(full_state(&fx.ws), h, "a refused recovery writes nothing and keeps the journal");
     assert_eq!(std::fs::read(&edited).unwrap(), bytes, "the hand edit is kept");
     assert!(s.read_only());
 
@@ -368,7 +368,7 @@ fn recovery_refuses_when_a_file_changed_since_the_crash() {
         assert_eq!(code(&e), "read_only", "{id}");
         assert_eq!(detail(&e, "reason"), Some("recovery"), "{id}");
     }
-    assert_eq!(tree_hash(&fx.ws), h);
+    assert_eq!(full_state(&fx.ws), h);
 
     // The way out: the user removes the journal; the edit stays.
     std::fs::remove_dir_all(fx.ws.join(JOURNAL_DIR)).unwrap();
@@ -419,11 +419,11 @@ fn recovery_refuses_a_corrupt_or_newer_journal_and_writes_nothing() {
     for (label, reason, plant) in cases {
         let fx = clone_fixture(&cx);
         plant(&fx);
-        let h = tree_hash(&fx.ws);
+        let h = full_state(&fx.ws);
         let (s, opened) = reopen(&fx);
         assert_refused(&opened, label);
         assert_eq!(recovery(&opened)["reason"], json!(reason), "{label}");
-        assert_eq!(tree_hash(&fx.ws), h, "{label}: nothing is written");
+        assert_eq!(full_state(&fx.ws), h, "{label}: nothing is written");
         assert!(s.read_only(), "{label}");
     }
 }
@@ -438,11 +438,11 @@ fn a_blob_that_fails_its_digest_stops_recovery_before_any_write() {
     let first = journal.entries.iter().position(|e| e.before.is_some()).unwrap();
     assert_eq!(first, 0, "the move starts by removing an existing page");
     std::fs::write(cx.ws.join(journal_blob(first)), b"tampered").unwrap();
-    let h = tree_hash(&cx.ws);
+    let h = full_state(&cx.ws);
     let (_s, opened) = reopen(&cx);
     assert_refused(&opened, "digest");
     assert_eq!(recovery(&opened)["reason"], json!("corrupt"));
-    assert_eq!(tree_hash(&cx.ws), h, "entries later in the journal must not have been restored");
+    assert_eq!(full_state(&cx.ws), h, "entries later in the journal must not have been restored");
     assert_eq!(content(&cx.ws), r.after, "the crash state is left as it was");
 }
 
@@ -453,25 +453,25 @@ fn recovery_is_pending_when_the_open_may_not_write() {
 
     // Requested read-only.
     let fx = crashed(&r, r.h + 1);
-    let h = tree_hash(&fx.ws);
+    let h = full_state(&fx.ws);
     let mut s = bare_session();
     let opened = s.run("workspace.open", &json!({"path": fx.project.to_str().unwrap(), "readOnly": true})).unwrap();
     assert_eq!(opened["readOnly"], json!(true));
     assert_eq!(opened["readOnlyReason"], json!("requested"));
     assert_eq!(recovery(&opened)["state"], json!("pending"));
     assert_eq!(recovery(&opened)["command"], json!("test.writeFiles"));
-    assert_eq!(tree_hash(&fx.ws), h, "a read-only open never recovers");
+    assert_eq!(full_state(&fx.ws), h, "a read-only open never recovers");
 
     // Outside the write root.
     let fx = crashed(&r, r.h + 1);
-    let h = tree_hash(&fx.ws);
+    let h = full_state(&fx.ws);
     let w = fx.dir.path().join("w");
     std::fs::create_dir_all(&w).unwrap();
     let mut s = bare_session();
     s.set_roots(Some(Roots::new(fx.dir.path(), &w).unwrap()));
     let opened = s.run("workspace.open", &path_param(&fx.project)).unwrap();
     assert_eq!(recovery(&opened)["state"], json!("pending"));
-    assert_eq!(tree_hash(&fx.ws), h);
+    assert_eq!(full_state(&fx.ws), h);
 
     // A newer format.
     let fx = crashed(&r, r.h + 1);
@@ -479,11 +479,11 @@ fn recovery_is_pending_when_the_open_may_not_write() {
     let text = std::fs::read_to_string(&manifest).unwrap();
     assert!(text.contains("notecraft-workspace1"));
     std::fs::write(&manifest, text.replace("notecraft-workspace1", "notecraft-workspace2")).unwrap();
-    let h = tree_hash(&fx.ws);
+    let h = full_state(&fx.ws);
     let (_s, opened) = reopen(&fx);
-    assert_eq!(opened["readOnlyReason"], json!("newer_format"));
+    assert_eq!(opened["readOnlyReason"], json!("newerFormat"));
     assert_eq!(recovery(&opened)["state"], json!("pending"));
-    assert_eq!(tree_hash(&fx.ws), h);
+    assert_eq!(full_state(&fx.ws), h);
 }
 
 fn hostile_heads(head: &Value) -> Vec<(String, Vec<u8>)> {
@@ -515,7 +515,7 @@ fn hostile_heads(head: &Value) -> Vec<(String, Vec<u8>)> {
     edit("entries empty", &|h| h["entries"] = json!([]));
     edit("entries 100001", &|h| h["entries"] = Value::Array(vec![json!(0); 100_001]));
     edit("entry not an object", &|h| h["entries"][0] = json!(5));
-    for p in ["/x", ".cache/journal/head.json", ".CACHE/x", "con.md", ""] {
+    for p in ["/x", ".cache/journal/head.json", ".CACHE/x", ".local/lock", ".LOCAL/journal/x.json", "con.md", ""] {
         edit(&format!("path {p:?}"), &|h| h["entries"][0]["path"] = json!(p));
     }
     edit("path number", &|h| h["entries"][0]["path"] = json!(5));
@@ -550,12 +550,12 @@ fn recovery_survives_hostile_heads() {
     for (label, bytes) in hostile_heads(&head) {
         let fx = clone_fixture(&cx);
         plant_head(&fx, &bytes);
-        let h = tree_hash(&fx.ws);
+        let h = full_state(&fx.ws);
         let opened = open_timeout(&fx.project).unwrap_or_else(|e| panic!("{label}: open failed: {e}"));
         assert_refused(&opened, &label);
         let reason = recovery(&opened)["reason"].as_str().unwrap().to_string();
         assert!(reason == "corrupt" || reason == "newer", "{label}: {reason}");
-        assert_eq!(tree_hash(&fx.ws), h, "{label}");
+        assert_eq!(full_state(&fx.ws), h, "{label}");
     }
 }
 
@@ -571,17 +571,17 @@ fn recovery_survives_hostile_blobs_and_targets() {
     // Larger than the read cap (4 MiB).
     let fx = clone_fixture(&cx);
     std::fs::write(blob(&fx), vec![b'x'; 4 * 1024 * 1024 + 1]).unwrap();
-    let h = tree_hash(&fx.ws);
+    let h = full_state(&fx.ws);
     assert_refused(&open_timeout(&fx.project).unwrap(), "huge blob");
-    assert_eq!(tree_hash(&fx.ws), h);
+    assert_eq!(full_state(&fx.ws), h);
 
     // A folder where the blob should be.
     let fx = clone_fixture(&cx);
     std::fs::remove_file(blob(&fx)).unwrap();
     std::fs::create_dir(blob(&fx)).unwrap();
-    let h = tree_hash(&fx.ws);
+    let h = full_state(&fx.ws);
     assert_refused(&open_timeout(&fx.project).unwrap(), "blob folder");
-    assert_eq!(tree_hash(&fx.ws), h);
+    assert_eq!(full_state(&fx.ws), h);
 
     // A FIFO where the blob should be: reading it would block forever.
     #[cfg(unix)]
@@ -589,20 +589,20 @@ fn recovery_survives_hostile_blobs_and_targets() {
         let fx = clone_fixture(&cx);
         std::fs::remove_file(blob(&fx)).unwrap();
         if std::process::Command::new("mkfifo").arg(blob(&fx)).status().is_ok_and(|s| s.success()) {
-            let h = tree_hash(&fx.ws);
+            let h = full_state(&fx.ws);
             assert_refused(&open_timeout(&fx.project).unwrap(), "blob fifo");
-            assert_eq!(tree_hash(&fx.ws), h);
+            assert_eq!(full_state(&fx.ws), h);
         }
     }
 
     // head.json itself a folder: a value or an error, never a hang or a write.
     let fx = clone_fixture(&r.base);
     std::fs::create_dir_all(fx.ws.join(JOURNAL_HEAD)).unwrap();
-    let h = tree_hash(&fx.ws);
+    let h = full_state(&fx.ws);
     if let Ok(opened) = open_timeout(&fx.project) {
         assert_eq!(opened["readOnly"], json!(true), "an unreadable journal must not open writable");
     }
-    assert_eq!(tree_hash(&fx.ws), h);
+    assert_eq!(full_state(&fx.ws), h);
 
     // A target whose parent is a regular file: the restore cannot be done.
     let fx = clone_fixture(&cx);
@@ -618,10 +618,22 @@ fn recovery_survives_hostile_blobs_and_targets() {
 
 // ADR 0006 #8 and the hostile staged paths
 #[test]
-fn cache_is_reserved_in_any_case_and_only_at_the_first_segment() {
+fn cache_and_local_are_reserved_in_any_case_and_only_at_the_first_segment() {
     let fx = move_fixture();
-    let h = tree_hash(&fx.ws);
-    for path in [".cache", ".cache/", ".Cache/x", ".CACHE/journal/head.json", ".cache/journal/0.before"] {
+    let h = full_state(&fx.ws);
+    for path in [
+        ".cache",
+        ".cache/",
+        ".Cache/x",
+        ".CACHE/journal/head.json",
+        ".cache/journal/0.before",
+        ".local",
+        ".local/",
+        ".Local/x",
+        ".LOCAL/journal/head.json",
+        ".local/lock",
+        ".local/journal/0.before",
+    ] {
         for remove in [false, true] {
             let (mut s, ctl) = crash_session(&fx, usize::MAX);
             let item = if remove { json!({"path": path, "remove": true}) } else { json!({"path": path, "content": "x"}) };
@@ -631,23 +643,24 @@ fn cache_is_reserved_in_any_case_and_only_at_the_first_segment() {
             assert_eq!(detail(&e, "reason"), Some("reserved"), "{path}");
             assert!(e.details.contains_key("path"), "{path}");
             assert!(ctl.ops().is_empty(), "{path}: nothing is read or written: {:?}", ctl.ops());
-            assert_eq!(tree_hash(&fx.ws), h, "{path}");
+            assert_eq!(full_state(&fx.ws), h, "{path}");
         }
     }
     // Only the first segment is reserved.
     let (mut s, _) = crash_session(&fx, usize::MAX);
-    write_ok(&mut s, &[("a/.cache/x", "fine")]);
+    write_ok(&mut s, &[("a/.cache/x", "fine"), ("a/.local/x", "fine too")]);
     assert_eq!(content(&fx.ws).get("a/.cache/x"), Some(&b"fine".to_vec()));
+    assert_eq!(content(&fx.ws).get("a/.local/x"), Some(&b"fine too".to_vec()));
 }
 
 // Clean open stays free of journal files (regression for AT-L0-03-d, with the sweep on).
 #[test]
 fn a_clean_open_leaves_the_tree_hash_unchanged() {
     let fx = move_fixture();
-    let h = tree_hash(&fx.ws);
+    let h = full_state(&fx.ws);
     let (_s, opened) = reopen(&fx);
     assert!(recovery(&opened).is_null());
-    assert_eq!(tree_hash(&fx.ws), h);
+    assert_eq!(full_state(&fx.ws), h);
 }
 
 // ---- review round 1 ----
@@ -736,12 +749,12 @@ fn recovery_refuses_a_created_target_it_cannot_read() {
     assert!(target.is_file());
     std::fs::remove_file(&target).unwrap();
     std::fs::create_dir(&target).unwrap();
-    let h = tree_hash(&cx.ws);
+    let h = full_state(&cx.ws);
 
     let (_s, opened) = reopen(&cx);
     assert_refused(&opened, "unreadable target");
     assert_eq!(recovery(&opened)["reason"], json!("io"));
-    assert_eq!(tree_hash(&cx.ws), h, "no other entry is rolled back and the journal stays");
+    assert_eq!(full_state(&cx.ws), h, "no other entry is rolled back and the journal stays");
     assert!(target.is_dir());
     assert!(cx.ws.join(JOURNAL_HEAD).is_file());
 }
