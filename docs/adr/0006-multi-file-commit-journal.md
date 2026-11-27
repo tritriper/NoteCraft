@@ -1,7 +1,9 @@
 # ADR 0006 — Multi-file commits: an undo journal in `.cache/journal/`, recovery on open
 
 - **Status:** accepted (US-L0-10); #1, #3 to #7 and #10 superseded on 2026-11-27 for spec gate-1.5
-  (D-45) by [ADR 0008](0008-transactions-and-lock-follow-gate-1-5.md) (see "Amendments")
+  (D-45) by [ADR 0008](0008-transactions-and-lock-follow-gate-1-5.md) (see "Amendments").
+  The journal moves to `.local/journal/` in rework R1; the replacement protocol lands in rework
+  R2, and until then #1 and #3 to #7 still describe the code.
 - **Date:** 2026-11-27
 - **Story:** US-L0-10, atomic multi-file transactions and crash recovery (F-CMD-10; ENF-03,
   ENF-12)

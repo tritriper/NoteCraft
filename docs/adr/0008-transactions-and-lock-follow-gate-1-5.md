@@ -3,6 +3,11 @@
 - **Status:** accepted (rework of US-L0-03, US-L0-10, US-L0-11 for spec gate-1.5, decisions D-45
   and D-46). It supersedes ADR 0006 #1, #3 to #7 and #10, and amends ADR 0005 #4, #6, #13, #14 and
   ADR 0007 #3 to #11 (each of those ADRs has a dated amendment that points here).
+- **Delivery:** in two pull requests. R1 (`.local/` paths, lock outcomes, reason tokens, US-L0-03
+  details: #1 to #3, #9, #10, #11 without the `recovery` shape, #12, #14, #15) lands first and
+  keeps ADR 0006's undo journal, at its new path in `.local/journal/`. R2 lands #4 to #8, the
+  `recovery` shape of #11, and #13; until R2 merges, ADR 0006 #1 and #3 to #7 still describe
+  the code.
 - **Date:** 2026-11-27
 - **Stories:** US-L0-03 (AT-h, AT-i, counts), US-L0-10 (AT-c, definitions), US-L0-11 (AT-c, AT-d,
   definitions); SPEC §5.0.6, file-format §2, §9.1, §10, commands.md §1.1 and §2.
