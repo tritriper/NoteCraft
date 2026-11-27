@@ -18,7 +18,7 @@ is the summary. The detail is in:
 
 | Milestone | Status | Stories done |
 |---|---|---|
-| M0 Foundations (L0) | in progress | 1 / 14 |
+| M0 Foundations (L0) | in progress | 2 / 14 |
 | M1 Pages, core (L1a) | planned | 0 / 21 |
 | M1.5 Pages, robustness (L1b) | planned | 0 / 9 |
 | M2 Databases (L2) | planned | 0 / 20 |
@@ -34,5 +34,6 @@ built one at a time from the behaviour spec (gate 1, draft 2), each as a PR to `
 Each change adds one file to [`docs/progress/`](docs/progress/) named `YYYY-MM-DD-<story-id>.md`
 instead of editing this page, so parallel branches don't conflict (shared rule 19). Latest:
 
+- 2026-11-27 — [US-L0-02: session, undo/redo and command registry](docs/progress/2026-11-27-us-l0-02.md)
 - 2026-11-26 — [Docs and workflow aligned with spec draft 2](docs/progress/2026-11-26-docs-draft-2.md)
 - 2026-11-25 — [US-L0-01: repository scaffold](docs/progress/2026-11-25-us-l0-01.md)
