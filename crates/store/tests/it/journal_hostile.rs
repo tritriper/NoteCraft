@@ -4,7 +4,7 @@
 use std::sync::mpsc;
 use std::time::Duration;
 
-use notecraft_store::{CorruptReason, Journal, JournalError, Swept};
+use notecraft_store::{CorruptReason, Journal, JournalError};
 
 use crate::support::*;
 use crate::sweep::{exists, put, workspace};
@@ -102,7 +102,7 @@ fn sweep_survives_a_symlink_loop_and_a_link_out() {
     put(&outside, ".z.1-2.craft_tmp", b"not ours");
     std::os::unix::fs::symlink(&outside, w.join("pages/out")).unwrap();
 
-    let swept: Swept = bounded("loop", move || ws.sweep().unwrap());
+    let swept: notecraft_store::Swept = bounded("loop", move || ws.sweep().unwrap());
     assert!(swept.removed >= 1);
     assert!(!exists(&w, "pages/.a.md.1-1.craft_tmp"));
     assert!(exists(&outside, ".z.1-2.craft_tmp"), "a link out of the workspace is never followed");
