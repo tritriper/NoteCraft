@@ -14,7 +14,7 @@ Kinds: **F** feature · **U** UI/UX · **FF** file format · **A** agent interfa
 
 ### 1. No engine, workspace or agent surfaces (F, A, FF)
 - **Done (US-L0-02):** session, undo/redo and the command registry ([ADR 0003](adr/0003-command-registry-and-undo.md)).
-- **Missing:** workspace on disk; stable ids; CLI; MCP server; control channel; atomic multi-file transactions and crash recovery; workspace lock;
+- **Missing:** workspace on disk; CLI; MCP server; control channel; atomic multi-file transactions and crash recovery; workspace lock;
   benchmark harness; surface parity test; Markdown parser prototype; hostile-parameter sweep; the
   egui window and the web build of the app.
 - **Stories:** US-L0-02 to US-L0-14. The `.craft` project format is not settled

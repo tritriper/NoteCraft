@@ -1,9 +1,9 @@
 # NoteCraft architecture
 
-> **Last reviewed:** 2026-11-25 · **Last updated:** 2026-11-27 · **Change:** minor (engine: session, undo and command registry)
+> **Last reviewed:** 2026-11-25 · **Last updated:** 2026-11-27 · **Change:** minor (model: stable ids)
 
 How NoteCraft is built. At this stage (lot L0) the engine has the session, undo and the
-command registry; the other crates are still empty. The behaviour spec is being written in a separate spec repository; once the lead tech
+command registry, and the model has stable ids; the other crates are still empty. The behaviour spec is being written in a separate spec repository; once the lead tech
 settles the architecture from it, this file becomes the committed, current summary (the longer
 working notes stay in the gitignored `plan/architecture.md`). Rules for working in the code are
 in [`AGENTS.md`](../AGENTS.md); decisions are in [`adr/`](adr/).
@@ -49,7 +49,16 @@ already written, in reverse; a panic is caught and returned as `io`. A commit th
 records one undo step (file snapshots) and clears redo. `edit.undo` / `edit.redo` write the
 snapshots back after checking that no file changed outside (`conflict`).
 
-The rest of the data flow is written with the data model and file format (US-L0-03, US-L0-04).
+### Ids ([ADR 0004](adr/0004-stable-ids.md))
+
+Every item has one `Id` (`model`) for its whole life: a UUIDv7 written as 26 Crockford base32
+characters in upper case. Lower case is accepted on read; other spellings (I/L/O aliases, hyphens, spaces) are refused; any 128-bit value is accepted on read. Ids never
+derive from a title or a path, and nothing changes them. `IdGen` keeps ids from one session in
+creation order, even within one millisecond or when the clock goes back. It reads the time
+through the `Clock` port and randomness through the `Entropy` port, so it never panics on any
+target, wasm included. The session will own the generator (US-L0-03).
+
+The rest of the data flow is written with the workspace and the file format (US-L0-03).
 
 ## Testing and gates
 
