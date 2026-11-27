@@ -11,7 +11,8 @@ model.
   shortcuts, the CLI, the control channel and MCP with the same parameters.
 - **One app, three modes.** A database is a collection of pages; a task is a database row.
 
-Targets: macOS, Windows, Linux, BSD and the web (WASM).
+Targets: macOS, Windows, Linux and BSD desktops. A web edition is planned later, with the
+server edition.
 
 ## Status
 
