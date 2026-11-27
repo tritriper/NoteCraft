@@ -198,6 +198,12 @@ pub fn clone_fixture(fx: &Fixture) -> Fixture {
     Fixture { dir, project, ws }
 }
 
+/// `.cache/lock` is recorded as present with no bytes: its content means nothing, and Windows
+/// refuses to read a file another handle has locked (OS error 33).
+fn is_lock_file(rel: &str) -> bool {
+    rel == ".cache/lock" || rel.ends_with("/.cache/lock")
+}
+
 fn regular_files(root: &Path, cur: &Path, with_cache: bool, out: &mut BTreeMap<String, Vec<u8>>) {
     for e in std::fs::read_dir(cur).unwrap() {
         let p = e.unwrap().path();
@@ -208,7 +214,8 @@ fn regular_files(root: &Path, cur: &Path, with_cache: bool, out: &mut BTreeMap<S
                 regular_files(root, &p, with_cache, out);
             }
         } else if meta.is_file() {
-            out.insert(rel, std::fs::read(&p).unwrap());
+            let bytes = if is_lock_file(&rel) { Vec::new() } else { std::fs::read(&p).unwrap() };
+            out.insert(rel, bytes);
         }
     }
 }

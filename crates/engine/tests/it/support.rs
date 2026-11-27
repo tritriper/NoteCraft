@@ -47,7 +47,8 @@ pub fn snapshot(dir: &TempDir) -> BTreeMap<String, Vec<u8>> {
                 walk(root, &p, out);
             } else {
                 let rel = p.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/");
-                out.insert(rel, std::fs::read(&p).unwrap());
+                let bytes = if is_lock_file(&rel) { Vec::new() } else { std::fs::read(&p).unwrap() };
+                out.insert(rel, bytes);
             }
         }
     }
@@ -365,6 +366,12 @@ pub enum Entry {
 
 /// Every entry below `dir`, recursively, without following symlinks. Equal trees mean
 /// byte-identical files with the same modification times.
+/// `.cache/lock` is recorded as present with no bytes: its content means nothing, and Windows
+/// refuses to read a file another handle has locked (OS error 33).
+fn is_lock_file(rel: &str) -> bool {
+    rel == ".cache/lock" || rel.ends_with("/.cache/lock")
+}
+
 pub fn tree(dir: &Path) -> BTreeMap<String, Entry> {
     fn walk(root: &Path, cur: &Path, out: &mut BTreeMap<String, Entry>) {
         for e in std::fs::read_dir(cur).unwrap() {
@@ -377,7 +384,8 @@ pub fn tree(dir: &Path) -> BTreeMap<String, Entry> {
                 out.insert(rel, Entry::Dir);
                 walk(root, &p, out);
             } else {
-                out.insert(rel, Entry::File { bytes: std::fs::read(&p).unwrap(), mtime: meta.modified().unwrap() });
+                let bytes = if is_lock_file(&rel) { Vec::new() } else { std::fs::read(&p).unwrap() };
+                out.insert(rel, Entry::File { bytes, mtime: meta.modified().unwrap() });
             }
         }
     }
