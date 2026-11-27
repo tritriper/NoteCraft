@@ -12,7 +12,8 @@ model.
 - **One app, three modes.** A database is a collection of pages; a task is a database row.
 
 For personal use first; collaboration between several people is a later server edition.
-Targets: macOS, Windows, Linux, BSD desktop; the non-UI crates also build for WASM.
+Targets: macOS, Windows, Linux and BSD desktops. A web edition is planned later, with the
+server edition.
 
 ## Status
 
