@@ -200,3 +200,14 @@ fn err_entropy_failure_on_new_millisecond_leaves_generator_unchanged() {
     let after = id_gen.generate().unwrap();
     assert!(before < after);
 }
+
+// US-L0-03: the workspace's `created` comes from its id, so the id must expose its own time.
+#[test]
+fn workspace_id_timestamp_matches_clock() {
+    for t in [T0, T0 + 1, T0 + 86_400_000] {
+        let mut id_gen = IdGen::with_sources(FixedClock(t), SystemEntropy);
+        let id = id_gen.generate().unwrap();
+        assert_eq!(id.timestamp_ms(), t);
+        assert_eq!(id.timestamp_ms(), timestamp_ms(id));
+    }
+}
