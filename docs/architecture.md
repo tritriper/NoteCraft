@@ -1,6 +1,6 @@
 # NoteCraft architecture
 
-> **Last reviewed:** 2026-11-25 · **Last updated:** 2026-11-27 · **Change:** minor (workspace on disk: design, ADR 0005)
+> **Last reviewed:** 2026-11-25 · **Last updated:** 2026-11-27 · **Change:** minor (crash safety: design, ADR 0006)
 
 How NoteCraft is built. At this stage (lot L0) the engine has the session, undo and the
 command registry, and the model has stable ids; the store has the workspace on disk. The behaviour spec is being written in a separate spec repository; once the lead tech
@@ -71,6 +71,18 @@ write goes through the session's commit path and undo: a `Files` adapter over th
 path inside the workspace and writes it atomically with craft-libs' `craft-atomic` (temporary file, flush, rename). The format tag and newer-file detection come from craft-libs' `craft-format`. The CLI and MCP
 set automation roots; a path outside them is `outside_roots`. Crates below L5 cannot reach the
 network: `cargo xtask layers` and `cargo xtask lints` check it.
+
+### Crash safety ([ADR 0006](adr/0006-multi-file-commit-journal.md), US-L0-10, in progress)
+
+Each file is replaced atomically, so one file is always old or new. A command that changes two or
+more files also keeps an undo journal in the workspace's `.cache/journal/`, which `.gitignore`
+already excludes. Before the first file is touched, the journal holds the previous bytes of every
+file the command will change. The command reports success only once the journal is removed,
+which is the commit point. If NoteCraft stops in between, the next `workspace.open` puts every
+file back as it was, so the workspace is entirely before or entirely after the command. Recovery
+never overwrites a file that changed outside NoteCraft since the crash. When it cannot finish
+safely, the workspace opens read-only and says why. Opening also removes the temporary files and
+staging folders that a crash leaves behind. Commands cannot write inside `.cache/`.
 
 ## Testing and gates
 
