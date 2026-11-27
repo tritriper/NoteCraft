@@ -260,7 +260,7 @@ fn count_items_does_not_follow_symlinks() {
     let other = dir.path().join("other");
     std::fs::create_dir_all(&other).unwrap();
     std::fs::write(other.join("x.md"), "x").unwrap();
-    let p =dir.path().join("p");
+    let p = dir.path().join("p");
     std::fs::create_dir(&p).unwrap();
     let ws = Workspace::create(&Project::new(&p), model("n")).unwrap();
     std::os::unix::fs::symlink(&other, p.join("notecraft/pages/link")).unwrap();

@@ -63,7 +63,7 @@ pub fn put_manifest(project: &Path, bytes: &[u8]) {
     std::fs::write(dir.join("workspace.json"), bytes).unwrap();
 }
 
-pub const FIXTURE_ID: &str = "0190a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b";
+pub const FIXTURE_ID: &str = "01KB0A1B2C3D4E5F6G7H8J9KMN";
 
 /// A hand-written manifest with a fixed id and name and an unknown key.
 pub fn valid_manifest(format_tag: &str) -> String {

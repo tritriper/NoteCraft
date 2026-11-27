@@ -13,11 +13,7 @@ fn parse(text: &str) -> Result<Manifest, notecraft_store::ManifestError> {
 #[test]
 fn newer_manifests_are_read_only_with_a_notice() {
     let max = format!("{}{}", notecraft_store::FORMAT_FAMILY, u32::MAX);
-    let cases = [
-        valid_manifest(&newer_tag()),
-        valid_manifest_with(&newer_tag(), "\"format_pending\": [\"laterChange\"]"),
-        valid_manifest(&max),
-    ];
+    let cases = [valid_manifest(&newer_tag()), valid_manifest_with(&newer_tag(), "\"format_pending\": [\"laterChange\"]"), valid_manifest(&max)];
     for text in cases {
         let m = parse(&text).unwrap_or_else(|e| panic!("{e:?} for {text}"));
         assert_eq!(m.check, FormatCheck::Newer, "{text}");
@@ -38,11 +34,20 @@ fn the_current_format_is_current_and_has_no_notice() {
     assert_eq!(m.workspace.created, None);
 }
 
-// ADR 0005 #6: a pending change this build does not know makes even the current number newer.
+// ADR 0005 #6: format 1 has no changes, so a `format_pending` list beside it means nothing.
 #[test]
-fn an_unknown_pending_change_makes_the_current_number_newer() {
+fn a_pending_list_beside_the_current_number_does_not_make_it_newer() {
     let m = parse(&valid_manifest_with(&current_tag(), "\"format_pending\": [\"laterChange\"]")).unwrap();
+    assert_eq!(m.check, FormatCheck::Current);
+    assert_eq!(m.notice, None);
+}
+
+// ADR 0005 #6: a number above the current one is newer, with or without pending changes.
+#[test]
+fn a_number_above_current_with_pending_changes_is_newer_with_a_notice() {
+    let m = parse(&valid_manifest_with(&newer_tag(), "\"format_pending\": [\"laterChange\"]")).unwrap();
     assert_eq!(m.check, FormatCheck::Newer);
+    assert!(m.notice.as_deref().is_some_and(|n| !n.is_empty()));
 }
 
 // ADR 0005 #5: required keys.
@@ -66,14 +71,9 @@ fn missing_or_wrong_required_keys_are_corrupt() {
 #[test]
 fn format_tags_of_another_family_or_without_a_usable_number_are_corrupt() {
     let fam = notecraft_store::FORMAT_FAMILY;
-    for tag in [
-        "notecraft-schema1".to_string(),
-        fam.to_string(),
-        format!("{fam}0"),
-        format!("{fam}1x"),
-        format!("{fam}-1"),
-        format!("{fam}99999999999"),
-    ] {
+    for tag in
+        ["notecraft-schema1".to_string(), fam.to_string(), format!("{fam}0"), format!("{fam}1x"), format!("{fam}-1"), format!("{fam}99999999999")]
+    {
         let e = parse(&valid_manifest(&tag)).unwrap_err();
         assert_eq!(e.reason, CorruptReason::Format, "{tag}");
     }
@@ -100,9 +100,9 @@ fn usable_settings_are_read() {
 
 // ADR 0004: ids are read in any case and mean the same id.
 #[test]
-fn an_upper_case_id_is_the_same_id() {
-    let upper = valid_manifest(&current_tag()).replace(FIXTURE_ID, &FIXTURE_ID.to_uppercase());
-    assert_eq!(parse(&upper).unwrap().workspace.id.to_string(), FIXTURE_ID);
+fn a_lower_case_id_is_the_same_id() {
+    let lower = valid_manifest(&current_tag()).replace(FIXTURE_ID, &FIXTURE_ID.to_lowercase());
+    assert_eq!(parse(&lower).unwrap().workspace.id.to_string(), FIXTURE_ID);
 }
 
 // Hostile input: duplicate keys, the last one wins.

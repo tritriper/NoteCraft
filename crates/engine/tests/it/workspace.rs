@@ -295,16 +295,24 @@ fn at_l0_03_d_close_and_reopen_write_nothing() {
 fn at_l0_03_e_create_over_existing_workspace_is_invalid_params() {
     type Setup = fn(&Path);
     let cases: Vec<(&str, Setup, &str)> = vec![
-        ("second create", |p| {
-            let mut s = bare_session();
-            create(&mut s, p);
-        }, "workspace_exists"),
+        (
+            "second create",
+            |p| {
+                let mut s = bare_session();
+                create(&mut s, p);
+            },
+            "workspace_exists",
+        ),
         ("corrupt manifest present", |p| put_manifest(p, b"{broken"), "workspace_exists"),
         ("newer manifest present", |p| put_manifest(p, valid_manifest("notecraft-workspace2").as_bytes()), "workspace_exists"),
-        ("stray file", |p| {
-            std::fs::create_dir_all(p.join("notecraft")).unwrap();
-            std::fs::write(p.join("notecraft/stray.txt"), "x").unwrap();
-        }, "folder_not_empty"),
+        (
+            "stray file",
+            |p| {
+                std::fs::create_dir_all(p.join("notecraft")).unwrap();
+                std::fs::write(p.join("notecraft/stray.txt"), "x").unwrap();
+            },
+            "folder_not_empty",
+        ),
         ("notecraft is a file", |p| std::fs::write(p.join("notecraft"), "x").unwrap(), "not_a_folder"),
     ];
     for (label, setup, reason) in cases {
