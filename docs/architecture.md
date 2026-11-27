@@ -60,7 +60,10 @@ target, wasm included. The session owns the generator (US-L0-03).
 
 ### The workspace on disk ([ADR 0005](adr/0005-workspace-on-disk.md), US-L0-03)
 
-A workspace is the folder `notecraft/` inside a project folder. `store::Project` is the one place
+A workspace is the folder `notecraft/` inside a project folder (`pages/` and `attachments/`; no
+`databases/` folder). `workspace.open` takes the project folder or its `notecraft/` folder
+(`Project::locate`), and results report the project folder. `workspace.info` counts pages, databases
+and rows below `pages/`, leaving the trash out. `store::Project` is the one place
 that maps a project to that folder, so only it changes when the `.craft` project format is
 settled. The store reads `workspace.json` with bounds (a regular file, at most 4 MiB). A manifest
 it cannot read is `corrupt`, and nothing is written. A manifest from a newer format opens the

@@ -71,11 +71,12 @@ fn remove_orphans(dir: &Path) -> u64 {
     removed
 }
 
-/// The sweep of a workspace folder `dir`; with `project` also the staging folders of its project.
-pub(crate) fn sweep(dir: &Path, project: bool) -> Swept {
+/// The sweep of a workspace folder `dir`; with `project` also the staging folders of that
+/// project folder (never the parent of `dir`, which differs when `notecraft` is a link).
+pub(crate) fn sweep(dir: &Path, project: Option<&Path>) -> Swept {
     let mut removed = remove_orphans(dir);
-    if let (true, Some(parent)) = (project, dir.parent()) {
-        removed += remove_staging(parent);
+    if let Some(project) = project {
+        removed += remove_staging(project);
     }
     let mut complete = true;
     let mut seen: u64 = 0;

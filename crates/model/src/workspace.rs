@@ -40,10 +40,11 @@ pub struct Settings {
 }
 
 /// A workspace: its id, name, creation time (RFC 3339 UTC text, kept as written) and settings.
+/// `name` is the name as written; `None` when absent or unusable (the project's default applies).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct Workspace {
     pub id: Id,
-    pub name: String,
+    pub name: Option<String>,
     pub created: Option<String>,
     pub settings: Settings,
 }

@@ -3,7 +3,7 @@
 use chrono::{DateTime, Datelike};
 use craft_format::newer::NewerFile;
 use notecraft_model::{Id, Mode, Settings, Workspace};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::error::{CorruptReason, ManifestError};
 use crate::format::{FORMAT_FAMILY, FORMAT_VERSION, WORKSPACE};
@@ -29,12 +29,23 @@ pub struct Manifest {
     /// Says which version wrote the file, when it is newer.
     pub notice: Option<String>,
     pub workspace: Workspace,
+    /// Top-level keys this version does not know, as read (not `format_pending`).
+    pub extra: Map<String, Value>,
+    /// Keys of `settings` this version does not know, as read.
+    pub settings_extra: Map<String, Value>,
 }
 
 impl Manifest {
     /// A manifest in the current format.
     pub fn new(workspace: Workspace) -> Manifest {
-        Manifest { format: format!("{FORMAT_FAMILY}{FORMAT_VERSION}"), check: FormatCheck::Current, notice: None, workspace }
+        Manifest {
+            format: format!("{FORMAT_FAMILY}{FORMAT_VERSION}"),
+            check: FormatCheck::Current,
+            notice: None,
+            workspace,
+            extra: Map::new(),
+            settings_extra: Map::new(),
+        }
     }
 
     /// Reads a manifest. Never panics; every refusal is a `ManifestError`.
@@ -62,11 +73,12 @@ impl Manifest {
             .and_then(Value::as_str)
             .and_then(|s| Id::parse(s).ok())
             .ok_or_else(|| ManifestError::field("id", "`id` is missing or is not a workspace id"))?;
-        let name =
-            value.get("name").and_then(Value::as_str).ok_or_else(|| ManifestError::field("name", "`name` is missing or is not text"))?.to_string();
+        let name = value.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).map(str::to_string);
         let created = value.get("created").and_then(Value::as_str).map(str::to_string);
         let settings = read_settings(value.get("settings"));
-        Ok(Manifest { format, check, notice, workspace: Workspace { id, name, created, settings } })
+        let extra = unknown(value.as_object(), &["format", "format_pending", "id", "name", "created", "settings"]);
+        let settings_extra = unknown(value.get("settings").and_then(Value::as_object), &["defaultMode", "trashRetentionDays"]);
+        Ok(Manifest { format, check, notice, workspace: Workspace { id, name, created, settings }, extra, settings_extra })
     }
 
     /// The canonical bytes: documented key order, 2 spaces, LF, a final newline.
@@ -75,7 +87,9 @@ impl Manifest {
         let mut out = String::from("{\n");
         out.push_str(&format!("  \"format\": {},\n", quote(&self.format)));
         out.push_str(&format!("  \"id\": {},\n", quote(&w.id.to_string())));
-        out.push_str(&format!("  \"name\": {},\n", quote(&w.name)));
+        if let Some(name) = &w.name {
+            out.push_str(&format!("  \"name\": {},\n", quote(name)));
+        }
         if let Some(created) = &w.created {
             out.push_str(&format!("  \"created\": {},\n", quote(created)));
         }
@@ -84,7 +98,14 @@ impl Manifest {
         if let Some(days) = w.settings.trash_retention_days {
             out.push_str(&format!(",\n    \"trashRetentionDays\": {days}"));
         }
-        out.push_str("\n  }\n}\n");
+        for (key, value) in &self.settings_extra {
+            out.push_str(&format!(",\n    {}: {}", quote(key), pretty(value, "    ")));
+        }
+        out.push_str("\n  }");
+        for (key, value) in &self.extra {
+            out.push_str(&format!(",\n  {}: {}", quote(key), pretty(value, "  ")));
+        }
+        out.push_str("\n}\n");
         out.into_bytes()
     }
 }
@@ -92,6 +113,18 @@ impl Manifest {
 /// A JSON string literal. Serialising a `str` cannot fail; the fallback is an empty string.
 fn quote(s: &str) -> String {
     serde_json::to_string(s).unwrap_or_else(|_| "\"\"".to_string())
+}
+
+/// The entries of `obj` whose key is not in `known`.
+fn unknown(obj: Option<&Map<String, Value>>, known: &[&str]) -> Map<String, Value> {
+    let Some(obj) = obj else { return Map::new() };
+    obj.iter().filter(|(k, _)| !known.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect()
+}
+
+/// A value in 2-space indented JSON whose continuation lines start with `indent`.
+fn pretty(value: &Value, indent: &str) -> String {
+    let text = serde_json::to_string_pretty(value).unwrap_or_else(|_| "null".to_string());
+    text.replace('\n', &format!("\n{indent}"))
 }
 
 /// Unusable settings fall back to the defaults (ADR 0005 #5).
@@ -121,7 +154,7 @@ mod tests {
         let id = Id::from_bytes([7; 16]);
         let w = Workspace {
             id,
-            name: "a \"quoted\" name".to_string(),
+            name: Some("a \"quoted\" name".to_string()),
             created: format_created(1_785_000_000_000),
             settings: Settings { default_mode: Mode::Tasks, trash_retention_days: Some(14) },
         };
@@ -147,7 +180,7 @@ mod tests {
         let m = Manifest::parse(&text(&higher, "\"format_pending\": [\"later\"], ")).unwrap_or_else(|e| panic!("{e:?}"));
         assert_eq!(m.check, FormatCheck::Newer);
         assert!(m.notice.is_some_and(|n| !n.is_empty()));
-        assert_eq!(m.workspace.name, "n");
+        assert_eq!(m.workspace.name.as_deref(), Some("n"));
     }
 
     #[test]
